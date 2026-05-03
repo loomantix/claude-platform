@@ -1,0 +1,199 @@
+# Sync canonical files from an upstream repo — produces verified commits.
+#
+# This is the canonical TEMPLATE for the consumer-side sync workflow. Drop
+# it into a consumer repo at `.github/workflows/sync-from-upstream.yml`
+# (drop the `.template` suffix). Then fill in `UPSTREAM_REPO` to point at
+# your upstream, and adjust `PR_BASE_BRANCH` if your release flow targets
+# something other than `main`.
+#
+# How this works:
+#
+#   1. Authenticates as a GitHub App via `actions/create-github-app-token@v1`.
+#      Required secrets on the consumer repo (or as org-level secrets):
+#        - SYNC_APP_ID         (App id)
+#        - SYNC_APP_PRIVATE_KEY (PEM-encoded private key)
+#      The App must be installed on the consumer repo with `contents: write`
+#      and `pull_requests: write`. If your conventions name the secrets
+#      differently, just update the references below.
+#
+#   2. Replaces `git commit + git push` with `scripts/create-signed-commit.py`
+#      from the cloned upstream repo. That script uses the GitHub Contents
+#      API (git/blobs → git/trees → git/commits → git/refs) to create the
+#      sync commit. Commits created via that path are auto-signed by GitHub
+#      with `committer: GitHub`, `verified: true` — useful when SOC 2 or
+#      similar controls require attested-actor sign-off on every change.
+#
+#   3. Uses the App's installation token (not the default GITHUB_TOKEN /
+#      github-actions[bot]) for both the commit creation and the
+#      `gh pr create` call. The PR is attributed to the App, decoupling
+#      the committer identity from any human reviewer — reviewers can
+#      approve without violating segregation-of-duties controls.
+#
+# Trust model: UPSTREAM_REF defaults to a tag (`sync-v1`), not `main`, so
+# pushes to the upstream's main don't auto-propagate. Bumping the tag is
+# the deliberate gate. Kill switch via `SKIP_UPSTREAM_SYNC` repo variable.
+#
+# UPSTREAM_READ_TOKEN is required only if your upstream repo is private.
+# For public upstream repos, remove the validation step + the auth header
+# in the clone step (anonymous clone works).
+
+name: Sync from upstream
+
+on:
+  schedule:
+    - cron: '0 9 * * *'   # daily at 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: sync-from-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: <owner>/<repo>     # e.g. loomantix/claude-platform
+  UPSTREAM_REF: sync-v1
+  SYNC_BRANCH_PREFIX: sync/upstream
+  PR_BASE_BRANCH: main              # override if your release flow uses staging etc.
+
+jobs:
+  sync:
+    if: vars.SKIP_UPSTREAM_SYNC == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+
+      - name: Checkout consumer repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ env.PR_BASE_BRANCH }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Validate UPSTREAM_READ_TOKEN is configured
+        # Remove this entire step if your upstream is public.
+        env:
+          UPSTREAM_READ_TOKEN: ${{ secrets.UPSTREAM_READ_TOKEN }}
+        run: |
+          if [ -z "$UPSTREAM_READ_TOKEN" ]; then
+            echo "::error::UPSTREAM_READ_TOKEN secret is not configured. Set it on the consumer (fine-grained PAT or GitHub App token with 'Contents: Read' on $UPSTREAM_REPO). Remove this step entirely if the upstream is public." >&2
+            exit 1
+          fi
+
+      - name: Clone upstream
+        env:
+          UPSTREAM_READ_TOKEN: ${{ secrets.UPSTREAM_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Wipe any prior clone — on warm runners or rerun-failed jobs,
+          # `git remote add origin` fails if the dir already exists with
+          # state, and we'd silently end up working against stale content.
+          rm -rf /tmp/upstream
+          mkdir -p /tmp/upstream
+          cd /tmp/upstream
+          git init -q
+          # Ensure the auth header is unset on EXIT — success or failure.
+          # Without the trap, a `git fetch` error left the token in
+          # /tmp/upstream/.git/config, so subsequent steps that printed
+          # `git remote -v` or surfaced an error message could leak it.
+          trap 'git config --unset-all http.extraheader 2>/dev/null || true' EXIT
+          if [ -n "${UPSTREAM_READ_TOKEN:-}" ]; then
+            AUTH_HEADER="Authorization: Basic $(printf 'x-access-token:%s' "$UPSTREAM_READ_TOKEN" | base64 -w0)"
+            git config http.extraheader "$AUTH_HEADER"
+          fi
+          git remote add origin "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --depth=1 origin "refs/tags/${UPSTREAM_REF}:refs/tags/${UPSTREAM_REF}" 2>/dev/null \
+            || git fetch --depth=1 origin "${UPSTREAM_REF}"
+          git checkout -q FETCH_HEAD
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python3 -m pip install 'pyyaml==6.0.2'
+
+      - name: Run sync engine
+        run: |
+          set -euo pipefail
+          python3 /tmp/upstream/scripts/sync-engine.py \
+            --upstream-repo /tmp/upstream \
+            --consumer-dir .
+
+      - name: Detect changes
+        id: diff
+        run: |
+          set -euo pipefail
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "✅ Already in sync with upstream"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git status --short
+          fi
+
+      - name: Create signed commit + open / refresh sync PR
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%Y%m%d)
+          BRANCH="${SYNC_BRANCH_PREFIX}-${DATE}"
+
+          # Close any prior open sync PRs to keep history clean. `--limit 100`
+          # is deterministic; the default 30 would let stale PRs accumulate
+          # in busy repos.
+          gh pr list \
+            --state open \
+            --limit 100 \
+            --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"${SYNC_BRANCH_PREFIX}-\")) | .number" \
+          | while read -r prior; do
+              [ -z "$prior" ] && continue
+              echo "Closing prior sync PR #$prior"
+              gh pr close "$prior" --delete-branch \
+                --comment "Superseded by today's sync run."
+            done
+
+          # Create the verified commit via the GitHub Contents API. Using
+          # the API (not `git commit`+`git push`) is what makes the commit
+          # signed-by-GitHub. The App token is the actor; commits show
+          # `committer: GitHub`, `verified: true`.
+          OWNER="${GITHUB_REPOSITORY%/*}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          python3 /tmp/upstream/scripts/create-signed-commit.py \
+            --owner "$OWNER" \
+            --repo "$REPO" \
+            --base-branch "${PR_BASE_BRANCH}" \
+            --new-branch "$BRANCH" \
+            --message "chore: sync from ${UPSTREAM_REPO}@${UPSTREAM_REF}" \
+            --consumer-dir .
+
+          # Open the PR (or refresh title/body if it already exists for the
+          # date-stamped branch). `gh pr create` errors if a PR already
+          # exists for $BRANCH; fall through to gh pr edit on that path.
+          PR_TITLE="Sync from ${UPSTREAM_REPO}"
+          PR_BODY="Automated sync from \`${UPSTREAM_REPO}@${UPSTREAM_REF}\`. Review the diff carefully before merging — substituted content reflects current \`.platform-config.yml\`."
+          if ! gh pr create \
+                --base "${PR_BASE_BRANCH}" \
+                --head "$BRANCH" \
+                --title "$PR_TITLE" \
+                --body "$PR_BODY" 2>/tmp/pr-create-err; then
+            if grep -q "already exists" /tmp/pr-create-err; then
+              echo "PR for $BRANCH already exists — refreshing"
+              gh pr edit "$BRANCH" --title "$PR_TITLE" --body "$PR_BODY"
+            else
+              cat /tmp/pr-create-err >&2
+              exit 1
+            fi
+          fi

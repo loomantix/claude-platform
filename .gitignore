@@ -1,0 +1,24 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Local Claude Code overrides
+.claude/settings.local.json
+
+# Python venvs (if anyone sets one up to run the engine locally)
+.venv/
+venv/
+
+# Test artifacts (in case a future test suite drops things here)
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage/
+htmlcov/

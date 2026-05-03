@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Create a verified commit via the GitHub Contents API.
+
+Replaces `git commit` + `git push` in the upstream-sync workflow.
+Commits created via the API endpoints (`git/blobs`, `git/trees`,
+`git/commits`, `git/refs`) are auto-signed by GitHub when invoked with
+a GitHub App installation token — the resulting commit shows
+`committer: GitHub` and `verified: true`, satisfying SOC 2 (and similar)
+controls that require human-or-attested-actor sign-off on every change.
+
+Why this exists:
+- `git commit` from inside a workflow runner produces unsigned commits
+  attributed to `github-actions[bot]`. Audit frameworks (SOC 2, ISO 27001,
+  etc.) flag these because the commit lacks cryptographic attestation
+  tied to an attested identity.
+- The same workflow using the GitHub Contents API + a GitHub App's
+  installation token produces commits that are audit-clean: signed,
+  attributed to a known App identity, and audit-traceable.
+
+Usage (called from sync-from-upstream.yml after the sync engine writes
+files to the consumer working tree):
+
+    python3 create-signed-commit.py \\
+        --owner <owner> --repo <repo> \\
+        --base-branch <branch> \\
+        --new-branch <branch> \\
+        --message "<commit message>" \\
+        --consumer-dir <path> \\
+        --token-env GH_APP_TOKEN
+
+Inputs:
+- The consumer working directory has the modifications already on disk
+  (the sync engine already wrote them).
+- The token-env var holds an App installation token (generated upstream
+  via actions/create-github-app-token).
+
+Outputs:
+- A new branch ref pointing at a signed commit. The workflow then opens
+  a PR against that branch.
+
+Exit codes: 0 on success, 1 on API error, 2 on bad invocation.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+def run(*args: str, cwd: Path | None = None) -> str:
+    """Run a shell command and return stdout. Exit on failure."""
+    res = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    if res.returncode != 0:
+        sys.stderr.write(f"command failed ({res.returncode}): {' '.join(args)}\n{res.stderr}")
+        sys.exit(1)
+    return res.stdout
+
+
+def github_api(
+    method: str,
+    path: str,
+    token: str,
+    body: dict[str, Any] | None = None,
+    allow_404: bool = False,
+) -> dict[str, Any] | None:
+    """Issue a GitHub REST request. Returns parsed JSON, or None on 404 if allow_404."""
+    url = f"https://api.github.com{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, method=method, data=data, headers=headers)
+    try:
+        # Bound network wait — a hung connection on the runner shouldn't
+        # consume the entire workflow timeout (5 min default).
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404 and allow_404:
+            return None
+        sys.stderr.write(f"GitHub API {method} {path}: {e.code} {e.reason}\n")
+        try:
+            sys.stderr.write(e.read().decode() + "\n")
+        except Exception:
+            pass
+        sys.exit(1)
+
+
+def parse_status(consumer_dir: Path) -> tuple[list[str], list[str]]:
+    """Return (modified_or_added, deleted) file paths relative to consumer_dir.
+
+    Uses `git status --porcelain -z` for unambiguous parsing: paths are
+    NUL-separated and never quoted or escaped, so paths with spaces /
+    special characters work without ad-hoc unicode-escape handling.
+
+    Renames (status R) and copies (status C) are emitted as TWO
+    NUL-separated strings — the new (destination) path immediately after
+    the status code, then the old (source) path as a separate entry.
+    For renames we record the new path as an upsert AND the old path as
+    a delete (without the delete, the tree's `base_tree` would preserve
+    the old file, turning a rename into a copy). Copies record only the
+    new path; the old path stays in place.
+    """
+    # `git status --porcelain` covers tracked + untracked, staged + unstaged.
+    # That's the right scope: anything the sync engine touched shows up.
+    #
+    # `-uall` (untracked-files=all) is critical: without it, an untracked
+    # directory is reported as a single `?? path/` entry instead of one
+    # entry per file inside. Reading bytes from a directory entry raises
+    # IsADirectoryError. With `-uall`, every untracked file is listed
+    # individually — which is what we need to create a blob per file.
+    # This case shows up the first time a new skill (whose directory
+    # didn't previously exist on the consumer) gets synced.
+    raw = run("git", "status", "--porcelain=v1", "-z", "-uall", cwd=consumer_dir)
+    if not raw:
+        return [], []
+
+    upserts: list[str] = []
+    deletes: list[str] = []
+
+    parts = raw.split("\0")
+    i = 0
+    while i < len(parts):
+        entry = parts[i]
+        i += 1
+        if not entry:
+            continue
+        # Format: "XY path" — XY are the 2-char status codes; path is at
+        # column 3. With -z, paths are never quoted.
+        code = entry[:2]
+        path = entry[3:]
+
+        # Renames (R) and copies (C) are followed by a separate
+        # NUL-terminated string carrying the source path. Consume it.
+        if "R" in code or "C" in code:
+            old_path = parts[i] if i < len(parts) else ""
+            i += 1
+            upserts.append(path)
+            if "R" in code and old_path:
+                # Pure rename: source path is removed from the new tree.
+                deletes.append(old_path)
+            # For copies (C), the source stays in place — no delete.
+            continue
+
+        if "D" in code and not (consumer_dir / path).exists():
+            deletes.append(path)
+        else:
+            upserts.append(path)
+
+    return upserts, deletes
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--owner", required=True)
+    p.add_argument("--repo", required=True)
+    p.add_argument("--base-branch", required=True, help="branch to fork the sync commit from")
+    p.add_argument("--new-branch", required=True, help="branch to create with the new commit")
+    p.add_argument("--message", required=True, help="commit message")
+    p.add_argument("--consumer-dir", required=True, type=Path)
+    p.add_argument("--token-env", default="GH_APP_TOKEN", help="env var holding the App installation token")
+    return p.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    token = os.environ.get(args.token_env)
+    if not token:
+        sys.stderr.write(f"missing token in env var {args.token_env}\n")
+        return 2
+
+    consumer_dir = args.consumer_dir.resolve()
+    owner_repo = f"{args.owner}/{args.repo}"
+
+    upserts, deletes = parse_status(consumer_dir)
+    if not upserts and not deletes:
+        print("No changes to commit.")
+        return 0
+    print(f"Changes detected: {len(upserts)} upsert, {len(deletes)} delete")
+
+    # 1. Resolve the base branch's HEAD commit + tree.
+    base_ref = github_api("GET", f"/repos/{owner_repo}/git/ref/heads/{args.base_branch}", token)
+    base_sha = base_ref["object"]["sha"]
+    base_commit = github_api("GET", f"/repos/{owner_repo}/git/commits/{base_sha}", token)
+    base_tree_sha = base_commit["tree"]["sha"]
+
+    # 2. Build the tree-entry list:
+    #    - For upserts: create a blob, reference it
+    #    - For deletes: tree entry with sha=null (omits from new tree)
+    tree: list[dict[str, Any]] = []
+
+    for path in upserts:
+        full = consumer_dir / path
+        # Defensive: even with `-uall`, skip anything that isn't a regular
+        # file (broken symlinks, sockets, directories that slipped through).
+        # Better to skip a malformed entry than crash the whole sync.
+        if not full.is_file():
+            sys.stderr.write(f"  ⚠️  skipping non-file upsert: {path}\n")
+            continue
+        content = full.read_bytes()
+        blob = github_api(
+            "POST",
+            f"/repos/{owner_repo}/git/blobs",
+            token,
+            {"content": base64.b64encode(content).decode("ascii"), "encoding": "base64"},
+        )
+        # Preserve executable bit (sync targets like ready.py, link.py
+        # carry mode 0755).
+        mode = "100755" if os.access(full, os.X_OK) else "100644"
+        tree.append({"path": path, "mode": mode, "type": "blob", "sha": blob["sha"]})
+
+    for path in deletes:
+        # `sha: null` removes the path from the resulting tree.
+        tree.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
+
+    # 3. Create the new tree (rooted at base_tree, with our entries applied).
+    new_tree = github_api(
+        "POST",
+        f"/repos/{owner_repo}/git/trees",
+        token,
+        {"base_tree": base_tree_sha, "tree": tree},
+    )
+
+    # 4. Create the commit. GitHub auto-signs commits created via this
+    #    endpoint when the token is from a GitHub App — committer becomes
+    #    "GitHub", verification: valid.
+    new_commit = github_api(
+        "POST",
+        f"/repos/{owner_repo}/git/commits",
+        token,
+        {"message": args.message, "tree": new_tree["sha"], "parents": [base_sha]},
+    )
+
+    # 5. Create or force-update the new-branch ref.
+    existing = github_api(
+        "GET", f"/repos/{owner_repo}/git/ref/heads/{args.new_branch}", token, allow_404=True
+    )
+    if existing is None:
+        github_api(
+            "POST",
+            f"/repos/{owner_repo}/git/refs",
+            token,
+            {"ref": f"refs/heads/{args.new_branch}", "sha": new_commit["sha"]},
+        )
+    else:
+        # Force-update — the prior run on the same date may have left a
+        # branch behind. The sync workflow's `Open or refresh` step closes
+        # the prior PR and reuses the date-stamped branch, so a force
+        # update is the documented behavior.
+        github_api(
+            "PATCH",
+            f"/repos/{owner_repo}/git/refs/heads/{args.new_branch}",
+            token,
+            {"sha": new_commit["sha"], "force": True},
+        )
+
+    print(f"✓ signed commit {new_commit['sha']} on branch {args.new_branch}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

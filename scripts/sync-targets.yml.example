@@ -1,0 +1,103 @@
+# Example sync-targets.yml — copy and adapt for your upstream repo.
+#
+# This manifest tells `sync-engine.py` which files to copy from the upstream
+# repo into a consumer, and which placeholder tokens (`<<KEY>>` form) to
+# substitute using values from the consumer's `.platform-config.yml`.
+#
+# `substitutions: []` means verbatim copy. `delete: true` causes the engine
+# to remove the destination from the consumer (and prune empty parent
+# directories) — use this to retire a previously-synced file across all
+# consumers. `mode` (e.g. `"0755"`) sets the destination permissions.
+#
+# Adding a new file to the sync surface = add an entry here.
+
+targets:
+  # Claude Code skills — checked into consumer repo so teammates without the
+  # global install can still invoke them. Devs who installed via
+  # `scripts/install-skills.sh` will resolve from `~/.claude/skills/` first;
+  # the in-repo copy is the fallback for everyone else and for CI contexts.
+  - source: .claude/skills/issues/SKILL.md
+    destination: .claude/skills/issues/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/issues/scripts/ready.py
+    destination: .claude/skills/issues/scripts/ready.py
+    substitutions: []
+    mode: "0755"
+
+  - source: .claude/skills/issues/scripts/link.py
+    destination: .claude/skills/issues/scripts/link.py
+    substitutions: []
+    mode: "0755"
+
+  - source: .claude/skills/refactorpass/SKILL.md
+    destination: .claude/skills/refactorpass/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/grill/SKILL.md
+    destination: .claude/skills/grill/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/deepgrill/SKILL.md
+    destination: .claude/skills/deepgrill/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/reviewit/SKILL.md
+    destination: .claude/skills/reviewit/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/copilot-review/SKILL.md
+    destination: .claude/skills/copilot-review/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/feature-dev/SKILL.md
+    destination: .claude/skills/feature-dev/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/agent-loop/SKILL.md
+    destination: .claude/skills/agent-loop/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/agent-loop/scripts/agent-loop.sh
+    destination: .claude/skills/agent-loop/scripts/agent-loop.sh
+    substitutions: []
+    mode: "0755"
+
+  # Custom Claude Code agents that the synced skills depend on. /feature-dev
+  # invokes code-explorer, code-architect, and code-reviewer. Without these
+  # in each consumer's .claude/agents/, those skills fail with "agent not found".
+  - source: .claude/agents/code-explorer.md
+    destination: .claude/agents/code-explorer.md
+    substitutions: []
+
+  - source: .claude/agents/code-architect.md
+    destination: .claude/agents/code-architect.md
+    substitutions: []
+
+  - source: .claude/agents/code-reviewer.md
+    destination: .claude/agents/code-reviewer.md
+    substitutions: []
+
+  # Canonical workflow doc — referenced from each consumer's CLAUDE.md as
+  # the source of truth for the AI review flow.
+  - source: .claude/REVIEW_WORKFLOW.md
+    destination: .claude/REVIEW_WORKFLOW.md
+    substitutions: []
+
+  - source: .claude/settings.json
+    destination: .claude/settings.json
+    substitutions: []
+
+  # Copilot instructions — generated from the template using the consumer's
+  # placeholder values. Result lands at `.github/copilot-instructions.md`.
+  - source: .github/copilot-instructions.md.template
+    destination: .github/copilot-instructions.md
+    substitutions:
+      - PROJECT_NAME
+      - PROJECT_OVERVIEW
+      - CANONICAL_DOCS
+      - STACK_TABLE
+      - CODE_RULES
+      - DOMAIN_RULES
+      - REVIEW_FOCUS
+      - WHAT_NOT_TO_SUGGEST_EXTRA

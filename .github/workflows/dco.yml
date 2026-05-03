@@ -1,0 +1,41 @@
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  dco-check:
+    name: DCO sign-off check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Verify all commits are signed off
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          missing=()
+          while read -r sha; do
+            if ! git show -s --format='%B' "$sha" | grep -qE '^Signed-off-by: .+ <.+@.+>$'; then
+              missing+=("$sha")
+            fi
+          done < <(git rev-list "$base..$head")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::The following commits are missing a DCO sign-off (Signed-off-by trailer):"
+            for sha in "${missing[@]}"; do
+              echo "  - $sha"
+              git show -s --format='    %s' "$sha"
+            done
+            echo ""
+            echo "Run 'git commit --amend -s' (last commit) or 'git rebase -i <base> --signoff' (multiple)"
+            echo "to add sign-off, then force-push the branch."
+            exit 1
+          fi
+          echo "All commits are signed off."

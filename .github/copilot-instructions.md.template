@@ -1,0 +1,48 @@
+# Copilot review instructions — <<PROJECT_NAME>>
+
+<<PROJECT_OVERVIEW>>
+
+Canonical docs: <<CANONICAL_DOCS>>. Path-specific rules live in `.github/instructions/*.instructions.md` and apply in addition to this file.
+
+## Stack (do not suggest wrong-framework idioms)
+
+<<STACK_TABLE>>
+
+## Non-negotiable code rules (flag as blocking)
+
+<<CODE_RULES>>
+
+<<DOMAIN_RULES>>
+
+## Review focus (priority order)
+
+<<REVIEW_FOCUS>>
+
+## What NOT to suggest
+
+- **Don't suggest comments that explain WHAT** (identifiers already do that) or reference the current PR / commit / caller. Comments are warranted only for non-obvious WHY.
+- **Don't suggest backwards-compat shims, deprecation aliases, `_unused` renames, or `// removed X` comments.** Delete instead.
+- **Don't suggest adding defensive validation at internal boundaries.** Validate only at system edges (controllers, user input, external APIs). Internal calls trust their types.
+- **Don't suggest splitting a tight bug-fix PR** to add surrounding refactors or test coverage for unrelated code.
+- **Don't suggest feature flags** for changes that can simply be made. No "toggle" unless explicitly requested.
+- **Don't suggest new abstractions, helper functions, or refactors** beyond what the PR requires. Three similar lines is better than a premature abstraction.
+- **Don't suggest squash or rebase merge** — repos use merge commits exclusively.
+
+<<WHAT_NOT_TO_SUGGEST_EXTRA>>
+
+---
+
+_When in doubt, prefer citing a rule from `CLAUDE.md` or a path-specific file in `.github/instructions/` over inventing new guidance._
+
+<!--
+This file is generated from the upstream repo's
+`.github/copilot-instructions.md.template` by the sync mechanism. Edits made
+here in a consumer repo will be overwritten on the next sync.
+
+To customize per-repo content, update `.platform-config.yml` in this repo with the
+substitutions for: PROJECT_NAME, PROJECT_OVERVIEW, CANONICAL_DOCS, STACK_TABLE,
+CODE_RULES, DOMAIN_RULES, REVIEW_FOCUS, WHAT_NOT_TO_SUGGEST_EXTRA.
+
+To improve the shared skeleton (anything outside the placeholders), edit the
+template upstream.
+-->

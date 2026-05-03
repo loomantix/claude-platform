@@ -1,0 +1,31 @@
+# Dependabot keeps platform's SHA-pinned third-party Actions current
+# (PR #56 / #53 mit #1). Without this, pins go stale silently when upstream
+# ships security fixes.
+#
+# Coverage limitation: Dependabot's github-actions ecosystem scans
+# `.github/workflows/*.{yml,yaml}` and nothing else. Two sync templates fall
+# outside that path:
+#   - `.github/workflows/sync-from-platform.yml.template` — `.yml.template`
+#     extension is not recognized
+#   - `scripts/sync-from-platform-workflow-template.yml` — outside the
+#     scanned directory
+# Both still need refresh when upstream Actions release. Run
+# `scripts/check-action-pin-drift.sh` to detect when their pinned SHAs no
+# longer match what the commented version tag resolves to upstream.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Bundle into one weekly PR — less noise, same security signal.
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies

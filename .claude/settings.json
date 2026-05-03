@@ -1,0 +1,4 @@
+{
+  "$comment_purpose": "Reserved for shared Claude Code hook or env settings. Currently empty.",
+  "$comment_scope": "This file is synced from the upstream repo — edits in a consumer will be overwritten on next sync. Add consumer-specific settings to .claude/settings.local.json instead (gitignored, per-developer)."
+}

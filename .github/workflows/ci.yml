@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python lint + syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pyyaml + ruff
+        run: python3 -m pip install 'pyyaml==6.0.2' 'ruff==0.9.10'
+      - name: Compile-check every Python source
+        run: |
+          set -euo pipefail
+          mapfile -t pyfiles < <(git ls-files '*.py')
+          if [ "${#pyfiles[@]}" -eq 0 ]; then
+            echo "(no Python files found)"
+            exit 0
+          fi
+          python3 -m py_compile "${pyfiles[@]}"
+      - name: Ruff lint
+        run: ruff check .
+
+  shell:
+    name: Shell syntax + shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n every shell script
+        run: |
+          set -euo pipefail
+          mapfile -t shfiles < <(git ls-files '*.sh')
+          for f in "${shfiles[@]}"; do
+            bash -n "$f"
+          done
+      - name: shellcheck (warnings allowed; errors fail)
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: error
+
+  yaml:
+    name: YAML syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m pip install 'pyyaml==6.0.2'
+      - name: Parse every YAML file
+        run: |
+          set -euo pipefail
+          mapfile -t ymlfiles < <(git ls-files '*.yml' '*.yaml')
+          for f in "${ymlfiles[@]}"; do
+            # `.template` files often contain literal `<placeholders>` that
+            # are still valid YAML — parse-only check is sufficient.
+            python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" "$f"
+          done
+
+  sync-targets-example:
+    name: sync-targets.yml.example matches schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m pip install 'pyyaml==6.0.2'
+      - name: Validate the example manifest parses + has expected shape
+        run: |
+          python3 - <<'PY'
+          import yaml, sys
+          doc = yaml.safe_load(open('scripts/sync-targets.yml.example'))
+          targets = doc.get('targets')
+          assert isinstance(targets, list) and targets, "targets must be a non-empty list"
+          for t in targets:
+              assert isinstance(t, dict), f"non-mapping target: {t!r}"
+              if t.get('delete'):
+                  assert 'destination' in t, f"delete target missing destination: {t!r}"
+              else:
+                  assert 'source' in t and 'destination' in t, f"copy target missing keys: {t!r}"
+          print(f"OK: {len(targets)} targets")
+          PY

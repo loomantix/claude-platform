@@ -32,7 +32,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Required, TypedDict
 
 try:
     import yaml
@@ -42,6 +42,31 @@ except ImportError:
         "ensure the consumer's sync workflow does so before invoking.\n"
     )
     sys.exit(2)
+
+
+class Target(TypedDict, total=False):
+    """One entry in `scripts/sync-targets.yml`.
+
+    Either a copy target (requires `source` + `destination`) or a delete
+    target (requires `destination` + `delete: True`). `substitutions` and
+    `mode` apply to copy targets only.
+
+    The schema is documented here for readers; the engine still validates
+    each field at runtime since YAML provides no type guarantees.
+    """
+
+    source: str
+    destination: Required[str]
+    substitutions: list[str]
+    mode: str | int
+    delete: bool
+
+
+class ConsumerConfig(TypedDict, total=False):
+    """Top-level shape of a consumer's `.platform-config.yml`."""
+
+    substitutions: dict[str, str]
+    skip_targets: list[str]
 
 
 PLACEHOLDER_RE = re.compile(r"<<([A-Z][A-Z0-9_]*)>>")

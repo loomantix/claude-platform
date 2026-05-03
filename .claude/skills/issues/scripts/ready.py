@@ -12,14 +12,40 @@ import json
 import re
 import subprocess
 import sys
+from enum import IntEnum
 from typing import Any
 
-PRIORITY_ORDER = {
-    "priority: critical": 0,
-    "priority: high": 1,
-    "priority: medium": 2,
-    "priority: low": 3,
-}
+
+class Priority(IntEnum):
+    """GitHub-issue priority labels, ordered most-urgent first.
+
+    Centralizes the three-way mapping (label string ↔ ordering ↔ display tag)
+    so that adding a new tier (e.g. `BLOCKER = -1`) only requires a single
+    enum member rather than edits in three places.
+    """
+
+    CRITICAL = 0
+    HIGH = 1
+    MEDIUM = 2
+    LOW = 3
+    UNKNOWN = 99
+
+    @property
+    def label(self) -> str:
+        """The `priority: <level>` GitHub label for this tier (empty for UNKNOWN)."""
+        return f"priority: {self.name.lower()}" if self is not Priority.UNKNOWN else ""
+
+    @property
+    def tag(self) -> str:
+        """Compact display tag (e.g. `P0`, `P?`)."""
+        return f"P{self.value}" if self is not Priority.UNKNOWN else "P?"
+
+    @classmethod
+    def from_label(cls, label: str) -> Priority:
+        for p in cls:
+            if p.label and p.label == label:
+                return p
+        return cls.UNKNOWN
 
 # Match "Blocked by #123" / "- Depends on #123" at the start of a line.
 BLOCKER_RE = re.compile(
@@ -75,16 +101,15 @@ def parse_blockers(body: str | None) -> set[int]:
     return {int(m.group(1)) for m in BLOCKER_RE.finditer(body or "")}
 
 
-def priority_score(issue: dict[str, Any]) -> int:
+def priority_score(issue: dict[str, Any]) -> Priority:
     return min(
-        (PRIORITY_ORDER.get(name, 99) for name in label_names(issue)),
-        default=99,
+        (Priority.from_label(name) for name in label_names(issue)),
+        default=Priority.UNKNOWN,
     )
 
 
 def priority_tag(issue: dict[str, Any]) -> str:
-    score = priority_score(issue)
-    return {0: "P0", 1: "P1", 2: "P2", 3: "P3"}.get(score, "P?")
+    return priority_score(issue).tag
 
 
 def format_row(issue: dict[str, Any]) -> str:

@@ -51,7 +51,14 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
+
+
+class StatusChanges(NamedTuple):
+    """Result of `parse_status`: paths to upsert + paths to delete."""
+
+    upserts: list[str]
+    deletes: list[str]
 
 
 def run(*args: str, cwd: Path | None = None) -> str:
@@ -63,14 +70,18 @@ def run(*args: str, cwd: Path | None = None) -> str:
     return res.stdout
 
 
-def github_api(
+def _github_request(
     method: str,
     path: str,
     token: str,
-    body: dict[str, Any] | None = None,
-    allow_404: bool = False,
+    body: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Issue a GitHub REST request. Returns parsed JSON, or None on 404 if allow_404."""
+    """Internal: issue a GitHub REST request. Returns parsed JSON, or raises HTTPError.
+
+    Callers should use `github_api` (errors are fatal) or `github_api_optional`
+    (404 returns None, other errors fatal) — both surface a clear contract at
+    the call site.
+    """
     url = f"https://api.github.com{path}"
     data = json.dumps(body).encode() if body is not None else None
     headers = {
@@ -81,23 +92,54 @@ def github_api(
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, method=method, data=data, headers=headers)
+    # Bound network wait — a hung connection on the runner shouldn't
+    # consume the entire workflow timeout (5 min default).
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def _exit_on_http_error(method: str, path: str, e: urllib.error.HTTPError) -> None:
+    sys.stderr.write(f"GitHub API {method} {path}: {e.code} {e.reason}\n")
     try:
-        # Bound network wait — a hung connection on the runner shouldn't
-        # consume the entire workflow timeout (5 min default).
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read())
+        sys.stderr.write(e.read().decode() + "\n")
+    except Exception:
+        pass
+    sys.exit(1)
+
+
+def github_api(
+    method: str,
+    path: str,
+    token: str,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Issue a GitHub REST request. Returns parsed JSON. Exits on any error."""
+    try:
+        result = _github_request(method, path, token, body)
     except urllib.error.HTTPError as e:
-        if e.code == 404 and allow_404:
+        _exit_on_http_error(method, path, e)
+        raise  # unreachable; satisfies the type checker
+    assert result is not None  # _github_request only returns None when raising
+    return result
+
+
+def github_api_optional(
+    method: str,
+    path: str,
+    token: str,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Issue a GitHub REST request. Returns None on 404. Exits on other errors."""
+    try:
+        return _github_request(method, path, token, body)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
             return None
-        sys.stderr.write(f"GitHub API {method} {path}: {e.code} {e.reason}\n")
-        try:
-            sys.stderr.write(e.read().decode() + "\n")
-        except Exception:
-            pass
-        sys.exit(1)
+        _exit_on_http_error(method, path, e)
+        raise  # unreachable; satisfies the type checker
 
 
-def parse_status(consumer_dir: Path) -> tuple[list[str], list[str]]:
+def parse_status(consumer_dir: Path) -> StatusChanges:
     """Return (modified_or_added, deleted) file paths relative to consumer_dir.
 
     Uses `git status --porcelain -z` for unambiguous parsing: paths are
@@ -124,7 +166,7 @@ def parse_status(consumer_dir: Path) -> tuple[list[str], list[str]]:
     # didn't previously exist on the consumer) gets synced.
     raw = run("git", "status", "--porcelain=v1", "-z", "-uall", cwd=consumer_dir)
     if not raw:
-        return [], []
+        return StatusChanges(upserts=[], deletes=[])
 
     upserts: list[str] = []
     deletes: list[str] = []
@@ -163,7 +205,7 @@ def parse_status(consumer_dir: Path) -> tuple[list[str], list[str]]:
         else:
             upserts.append(path)
 
-    return upserts, deletes
+    return StatusChanges(upserts=upserts, deletes=deletes)
 
 
 def parse_args() -> argparse.Namespace:
@@ -197,11 +239,11 @@ def main() -> int:
         )
         return 2
 
-    upserts, deletes = parse_status(consumer_dir)
-    if not upserts and not deletes:
+    changes = parse_status(consumer_dir)
+    if not changes.upserts and not changes.deletes:
         print("No changes to commit.")
         return 0
-    print(f"Changes detected: {len(upserts)} upsert, {len(deletes)} delete")
+    print(f"Changes detected: {len(changes.upserts)} upsert, {len(changes.deletes)} delete")
 
     # 1. Resolve the base branch's HEAD commit + tree.
     base_ref = github_api("GET", f"/repos/{owner_repo}/git/ref/heads/{args.base_branch}", token)
@@ -214,7 +256,7 @@ def main() -> int:
     #    - For deletes: tree entry with sha=null (omits from new tree)
     tree: list[dict[str, Any]] = []
 
-    for path in upserts:
+    for path in changes.upserts:
         full = consumer_dir / path
         # Even with `-uall`, an upsert path that isn't a regular file
         # (broken symlink, socket, directory) is a hard error: skipping it
@@ -235,7 +277,7 @@ def main() -> int:
         mode = "100755" if os.access(full, os.X_OK) else "100644"
         tree.append({"path": path, "mode": mode, "type": "blob", "sha": blob["sha"]})
 
-    for path in deletes:
+    for path in changes.deletes:
         # `sha: null` removes the path from the resulting tree.
         tree.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
 
@@ -258,8 +300,8 @@ def main() -> int:
     )
 
     # 5. Create or force-update the new-branch ref.
-    existing = github_api(
-        "GET", f"/repos/{owner_repo}/git/ref/heads/{args.new_branch}", token, allow_404=True
+    existing = github_api_optional(
+        "GET", f"/repos/{owner_repo}/git/ref/heads/{args.new_branch}", token
     )
     if existing is None:
         github_api(

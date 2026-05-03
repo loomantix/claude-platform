@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Check whether SHA-pinned Actions in our two sync templates match the
+# Check whether SHA-pinned Actions in the sync workflow template match the
 # commit each commented version tag currently resolves to upstream.
 #
-# Exists because Dependabot's github-actions ecosystem can't see these two
-# files (one is .yml.template, one lives outside .github/workflows/) — see
-# .github/dependabot.yml for the coverage rationale.
+# Exists because Dependabot's github-actions ecosystem can't see this file
+# (it has a `.yml.template` extension) — see .github/dependabot.yml for the
+# coverage rationale.
 #
 # Drift detection only checks "does the pinned SHA still match its
-# commented version?" — not "is there a newer version we should adopt?"
-# For the latter, glance at the upstream Releases tab when running this
+# commented version?" — not "is there a newer version available?". For
+# the latter, glance at the upstream Releases tab when running this
 # manually.
 #
 # Exit codes:
@@ -19,9 +19,9 @@
 
 set -euo pipefail
 
-# Pre-flight: bash 4.0+ for associative arrays, plus the CLI tools we shell
-# out to. Friendly errors beat opaque "declare: -A: invalid option" or
-# "command not found" mid-loop.
+# Pre-flight: bash 4.0+ for associative arrays, plus the CLI tools the
+# script shells out to. Friendly errors beat opaque "declare: -A: invalid
+# option" or "command not found" mid-loop.
 if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
   echo "ERROR: bash 4.0+ required (associative arrays); have ${BASH_VERSION:-unknown}." >&2
   echo "       macOS ships 3.2 by default — install via 'brew install bash'." >&2
@@ -79,8 +79,8 @@ for f in "${FILES[@]}"; do
       }
       # `git/refs/tags/X` returns an OBJECT on exact match, an ARRAY on
       # prefix match (e.g. `v6.0` matching `v6.0.0`/`v6.0.1`/`v6.0.2`).
-      # An array means the comment is ambiguous — we can't pick "the"
-      # upstream commit, so flag as unverified.
+      # An array means the comment is ambiguous — there's no canonical
+      # upstream commit to verify against, so flag as unverified.
       if [ "$(printf '%s' "$ref" | jq -r 'type')" != "object" ]; then
         printf '  ?  %-40s @ %s — tag matched as prefix (use exact tag name in the version comment)\n' "$action" "$version"
         unverified=$((unverified + 1))

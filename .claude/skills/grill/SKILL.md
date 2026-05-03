@@ -8,7 +8,7 @@ argument-hint: (optional "deep" — runs full agent matrix; default is the 2 hig
 
 You are running a deliberately adversarial pass on the developer's local changes after `/refactorpass` has cleaned them up but **before** the push and PR creation. The goal: catch issues that bot reviewers (`/reviewit` post-push) and human reviewers will flag, fix them now while it's still local, and require explicit user verification before the push.
 
-This skill is the answer to "are we sure?" — every push to origin should have been grilled.
+This skill is the deliberate adversarial pass between "I think this is ready" and `git push` — every push to origin should have been grilled.
 
 ## Mode resolution
 

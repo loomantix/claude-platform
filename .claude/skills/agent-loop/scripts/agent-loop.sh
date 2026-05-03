@@ -17,15 +17,17 @@
 #      merges and force-pushes). Genuine merge conflicts fail loud — the
 #      eventual push surfaces persistent conflicts via PUSH_FAILURES.
 #   2. Pick a work item — first non-`dev: human-only` issue from the ready
-#      queue, or (with --resume) an existing in-progress issue assigned to you.
+#      queue, or (with --resume) an existing in-progress issue assigned to the
+#      operator.
 #   3. Claim by adding @me as assignee. If a race happens (>1 assignee after),
 #      release and try the next.
 #   4. Spawn a fresh Claude session with bypassPermissions, tasked with
-#      reading `@RALPH.md` and completing the assigned issue. Stream output.
+#      reading `@agent-loop-instructions.md` and completing the assigned
+#      issue. Stream output.
 #   5. Push completed work to the collection branch with retry-and-merge logic.
 #
-# After the loop: opens a `Ralph: <branch>` PR with a summary of closed
-# issues and the commit log. Cleans up the worktree.
+# After the loop: opens an `agent-loop: <branch>` PR with a summary of
+# closed issues and the commit log. Cleans up the worktree.
 #
 # Source of truth: upstream `.claude/skills/agent-loop/scripts/`. Synced to
 # consumers via sync-targets.yml; edits in a consumer repo will be
@@ -69,7 +71,7 @@ if ! [[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]] || [ "$MAX_ITERATIONS" -lt 1 ]; then
 fi
 
 if [ -z "$COLLECTION_BRANCH" ]; then
-    COLLECTION_BRANCH="ralph-$(date +%Y%m%d-%H%M%S)-$(head -c2 /dev/urandom | xxd -p)"
+    COLLECTION_BRANCH="agent-loop-$(date +%Y%m%d-%H%M%S)-$(head -c2 /dev/urandom | xxd -p)"
 fi
 
 # Reject branch names with `..` segments or non-portable characters before
@@ -96,7 +98,7 @@ fi
 
 ITERATION=0
 # Sanitize the branch name for use in a filesystem path — slashes (legal
-# in git branch names like `ralph/foo`) would otherwise create nested
+# in git branch names like `agent-loop/foo`) would otherwise create nested
 # directories under /tmp and break worktree add/remove.
 WORKTREE_NAME=$(echo "$COLLECTION_BRANCH" | tr '/' '-')
 WORKTREE_DIR="/tmp/agent-loop-${WORKTREE_NAME}-$$"
@@ -152,11 +154,11 @@ if [ ! -x "$ISSUES_READY" ]; then
     exit 1
 fi
 
-if [ ! -f "$PROJECT_DIR/RALPH.md" ]; then
-    echo -e "${RED}✗${NC} RALPH.md not found in repo root"
-    echo "   /agent-loop spawns Claude with the prompt 'Read @RALPH.md and follow the instructions'."
-    echo "   Each repo carries its own RALPH.md describing how the agent should work the codebase."
-    echo "   Add a RALPH.md at the repo root before invoking /agent-loop."
+if [ ! -f "$PROJECT_DIR/agent-loop-instructions.md" ]; then
+    echo -e "${RED}✗${NC} agent-loop-instructions.md not found in repo root"
+    echo "   /agent-loop spawns Claude with the prompt 'Read @agent-loop-instructions.md and follow the instructions'."
+    echo "   Each repo carries its own agent-loop-instructions.md describing how the agent should work the codebase."
+    echo "   Add an agent-loop-instructions.md at the repo root before invoking /agent-loop."
     exit 1
 fi
 
@@ -221,14 +223,14 @@ push_to_collection() {
         MERGE_BASE=$(git merge-base HEAD "origin/$COLLECTION_BRANCH" 2>/dev/null || echo "none")
 
         if [ "$MERGE_BASE" = "none" ] || ! git merge-base --is-ancestor "$MERGE_BASE" "$REMOTE_HEAD" 2>/dev/null; then
-            echo -e "${YELLOW}› Remote was force-pushed — cherry-picking our commits onto new tip...${NC}"
+            echo -e "${YELLOW}› Remote was force-pushed — cherry-picking local commits onto new tip...${NC}"
             OUR_COMMITS=$(git log --reverse --format=%H "$MERGE_BASE..HEAD" 2>/dev/null || git log --reverse --format=%H "origin/$COLLECTION_BRANCH..HEAD" 2>/dev/null)
             if [ -z "$OUR_COMMITS" ]; then
                 echo -e "${DIM}› No local commits to preserve — resetting to remote${NC}"
                 git reset --hard "origin/$COLLECTION_BRANCH" --quiet
                 continue
             fi
-            # Snapshot our local HEAD before resetting so a failed
+            # Snapshot the local HEAD before resetting so a failed
             # cherry-pick can restore the original chain rather than
             # silently leaving a partial replay (which the next push
             # attempt would then ship as a wrong-content branch).
@@ -278,9 +280,9 @@ pick_next_issue() {
         local resume_err resumed
         resume_err=$(mktemp /tmp/agent-loop-resume-err.XXXXXX)
         # `.[0] // empty` short-circuits the downstream pipeline on an
-        # empty array so we get no output instead of a literal "null"
-        # string concatenated with .title (which would then look like a
-        # valid issue id to the caller).
+        # empty array so the script emits no output instead of a literal
+        # "null" string concatenated with .title (which would then look
+        # like a valid issue id to the caller).
         resumed=$(gh issue list --assignee @me --state open --limit 100 \
                     --json number,title,labels \
                     --jq '[.[] | select(([.labels[]?.name] | index("dev: human-only") | not))] | .[0] // empty | (.number|tostring) + "\t" + .title' \
@@ -400,9 +402,10 @@ while [ $ITERATION -lt $MAX_ITERATIONS ]; do
 
     if [ "$SOURCE" = "ready" ]; then
         # `gh issue edit --add-assignee` is not atomic across parallel
-        # callers; we add @me, then re-fetch to detect a race (>1 assignee)
-        # and release. A consistently-failing claim (permission denied,
-        # locked issue) hits the consecutive-failure bail at the top.
+        # callers; the script adds @me, then re-fetches to detect a race
+        # (>1 assignee) and releases. A consistently-failing claim
+        # (permission denied, locked issue) hits the consecutive-failure
+        # bail at the top.
         if ! gh issue edit "$CLAIMED_ID" --add-assignee @me 2>/dev/null; then
             echo -e "${YELLOW}› Could not claim issue #$CLAIMED_ID${NC}"
             bail_on_claim_failures
@@ -412,7 +415,7 @@ while [ $ITERATION -lt $MAX_ITERATIONS ]; do
 
         # Distinguish "fetch failed" (transient gh error) from "0 assignees"
         # (race that nobody won) — both are non-progress signals; the
-        # `|| echo "ERR"` fallback gives us a non-numeric sentinel.
+        # `|| echo "ERR"` fallback yields a non-numeric sentinel.
         assignee_count=$(gh issue view "$CLAIMED_ID" --json assignees --jq '[.assignees[].login] | length' 2>/dev/null || echo "ERR")
         if ! [[ "$assignee_count" =~ ^[0-9]+$ ]]; then
             echo -e "${YELLOW}› Could not verify claim on #$CLAIMED_ID (gh fetch failed) — releasing${NC}"
@@ -460,7 +463,7 @@ while [ $ITERATION -lt $MAX_ITERATIONS ]; do
     CLAUDE_ERR="$ITER_TMPDIR/claude.err"
 
     claude --chrome --permission-mode bypassPermissions --verbose --print \
-        "Read @RALPH.md and follow the instructions. Your assigned issue is #$CLAIMED_ID. Run 'gh issue view $CLAIMED_ID' to see the full description, then complete it." \
+        "Read @agent-loop-instructions.md and follow the instructions. Your assigned issue is #$CLAIMED_ID. Run 'gh issue view $CLAIMED_ID' to see the full description, then complete it." \
         --output-format stream-json > "$FIFO" 2> "$CLAUDE_ERR" &
     CLAUDE_PID=$!
 
@@ -523,8 +526,8 @@ while [ $ITERATION -lt $MAX_ITERATIONS ]; do
     done < "$FIFO"
 
     # `wait` on its own line under set -e would abort the script when
-    # claude exited nonzero, before we get to capture $?. The `|| ...`
-    # form keeps the assignment running.
+    # claude exited nonzero, before $? is captured. The `|| ...` form
+    # keeps the assignment running.
     CLAUDE_EXIT=0
     wait "$CLAUDE_PID" || CLAUDE_EXIT=$?
     CLAUDE_PID=""
@@ -577,7 +580,7 @@ echo "   Ended: $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
 
 # Don't suppress stderr or swallow exit — opening a PR off a stale
-# remote because we silently lost the final push is worse than skipping
+# remote because the final push silently failed is worse than skipping
 # the PR and surfacing the failure.
 FINAL_PUSH_OK=true
 if ! push_to_collection; then
@@ -590,7 +593,7 @@ COMMIT_COUNT=$(git rev-list --count "origin/$DEFAULT_BRANCH..origin/$COLLECTION_
 if [ "$FINAL_PUSH_OK" = true ] && [ "$COMMIT_COUNT" -gt 0 ]; then
     echo -e "${BLUE}▸${NC} $COMMIT_COUNT commit(s) on $COLLECTION_BRANCH — creating PR"
 
-    PR_BODY="## Summary\n\n/agent-loop autonomous run — $ITERATION iteration(s), $COMMIT_COUNT commit(s).\n"
+    PR_BODY="## Summary\n\nAutonomous /agent-loop run — $ITERATION iteration(s), $COMMIT_COUNT commit(s).\n"
 
     if [ ${#CLOSED_ISSUES[@]} -gt 0 ]; then
         PR_BODY+="\n### Closed Issues\n"
@@ -614,7 +617,7 @@ if [ "$FINAL_PUSH_OK" = true ] && [ "$COMMIT_COUNT" -gt 0 ]; then
         PR_URL=$(gh pr create \
             --base "$DEFAULT_BRANCH" \
             --head "$COLLECTION_BRANCH" \
-            --title "Ralph: $COLLECTION_BRANCH" \
+            --title "agent-loop: $COLLECTION_BRANCH" \
             --body "$(echo -e "$PR_BODY")" \
             2>"$PR_ERR") || true
 

@@ -107,8 +107,8 @@ def parse_status(consumer_dir: Path) -> tuple[list[str], list[str]]:
     Renames (status R) and copies (status C) are emitted as TWO
     NUL-separated strings — the new (destination) path immediately after
     the status code, then the old (source) path as a separate entry.
-    For renames we record the new path as an upsert AND the old path as
-    a delete (without the delete, the tree's `base_tree` would preserve
+    For renames the new path is recorded as an upsert AND the old path
+    as a delete (without the delete, the tree's `base_tree` would preserve
     the old file, turning a rename into a copy). Copies record only the
     new path; the old path stays in place.
     """
@@ -119,7 +119,7 @@ def parse_status(consumer_dir: Path) -> tuple[list[str], list[str]]:
     # directory is reported as a single `?? path/` entry instead of one
     # entry per file inside. Reading bytes from a directory entry raises
     # IsADirectoryError. With `-uall`, every untracked file is listed
-    # individually — which is what we need to create a blob per file.
+    # individually — which is what's needed to create a blob per file.
     # This case shows up the first time a new skill (whose directory
     # didn't previously exist on the consumer) gets synced.
     raw = run("git", "status", "--porcelain=v1", "-z", "-uall", cwd=consumer_dir)
@@ -239,7 +239,7 @@ def main() -> int:
         # `sha: null` removes the path from the resulting tree.
         tree.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
 
-    # 3. Create the new tree (rooted at base_tree, with our entries applied).
+    # 3. Create the new tree (rooted at base_tree, with the entries above applied).
     new_tree = github_api(
         "POST",
         f"/repos/{owner_repo}/git/trees",

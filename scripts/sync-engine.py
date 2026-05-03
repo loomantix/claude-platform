@@ -152,7 +152,7 @@ def prune_empty_parents(file_path: Path, root: Path) -> None:
     conditions handled silently; other OSErrors are logged to stderr and
     also stop the walk. Pruning is best-effort — failures are surfaced for
     visibility but do not propagate, since the file unlink has already
-    succeeded by the time we walk parents.
+    succeeded by the time the parent walk runs.
     """
     parent = file_path.parent.resolve()
     root = root.resolve()
@@ -238,7 +238,7 @@ def main() -> int:
 
         # Require `delete` to be a real boolean if present. Strings like
         # "false" / "no" are truthy in Python, so a stringly-typed mistake
-        # would silently arm a fleet-wide unlink. Hard-fail instead.
+        # would silently arm a sync-wide unlink. Hard-fail instead.
         delete_raw = target.get("delete")
         if delete_raw is not None and not isinstance(delete_raw, bool):
             sys.stderr.write(
@@ -247,9 +247,9 @@ def main() -> int:
             return 1
         delete_flag = bool(delete_raw)
 
-        # Type/shape validation. The manifest is platform-authored, so
-        # non-string paths or bare `.`/`..` here are bugs we want a clean
-        # error for rather than a downstream TypeError or write-the-cwd
+        # Type/shape validation. The manifest is upstream-authored, so
+        # non-string paths or bare `.`/`..` here are bugs that warrant a
+        # clean error rather than a downstream TypeError or write-the-cwd
         # surprise. `mode` only validates here for non-delete targets —
         # `parse_mode` raises on bad input, and a `mode` field on a
         # delete target is meaningless.
@@ -261,10 +261,11 @@ def main() -> int:
                 return 1
 
         # `source` is required for copy entries but optional for delete entries
-        # (the source file may no longer exist in platform — that's the whole
-        # point of retiring it). `destination` is always required. The manifest
-        # is platform-authored and fleet-propagating, so a malformed entry is a
-        # bug we want surfaced loudly, not silently dropped.
+        # (the source file may no longer exist in the upstream — that's the
+        # whole point of retiring it). `destination` is always required. The
+        # manifest is upstream-authored and sync-propagating, so a malformed
+        # entry is a bug that warrants surfacing loudly rather than silently
+        # dropping.
         if not dest_rel or (not delete_flag and not source_rel):
             sys.stderr.write(f"  ❌ malformed entry: {target!r}\n")
             return 1
@@ -291,9 +292,9 @@ def main() -> int:
             skipped += 1
             continue
 
-        # Destination paths come from a platform-controlled manifest today,
+        # Destination paths come from an upstream-controlled manifest today,
         # but this guards against a typo (`../shared/foo`) becoming a
-        # fleet-wide write/delete primitive outside the consumer tree.
+        # cross-tree write/delete primitive outside the consumer.
         dest_path = resolve_under(consumer_dir, dest_rel)
         if dest_path is None:
             sys.stderr.write(f"  ❌ destination escapes consumer root: {dest_rel}\n")
@@ -311,8 +312,8 @@ def main() -> int:
                 )
                 return 1
             # `exists()` follows symlinks and returns False on a dangling
-            # link; pair with `is_symlink()` so we still unlink broken
-            # symlinks instead of leaving them as silent residue.
+            # link; pair with `is_symlink()` so broken symlinks still get
+            # unlinked instead of leaving as silent residue.
             existed = dest_path.exists() or dest_path.is_symlink()
             if args.dry_run:
                 if existed:

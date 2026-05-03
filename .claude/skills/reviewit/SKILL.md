@@ -72,7 +72,7 @@ This replaces the older `/review-cycle` skill. Auto-trigger of Gemini and Copilo
 
    For mixed changesets (some source, some docs), run the full chain (Phase 1 onward) without prompting — source files justify the spend.
 
-6. **TodoWrite**: create tasks for "fire reviewers", "parse + dedup", "address findings (record resolutions)", "commit + push fixes", "post replies with real SHA", "loop check", per iteration. The "post replies" task is its own line item — never let it get folded into "commit + push" or it gets skipped.
+6. **TodoWrite**: create tasks for "fire reviewers", "parse + dedup", "address findings (record resolutions)", "commit + push fixes", "post replies with real SHA", "loop check", per iteration. The "post replies" task is its own line item — don't fold it into "commit + push" or it gets skipped.
 
 ---
 
@@ -140,7 +140,7 @@ Copilot bot node id is `BOT_kgDOCnlnWA` (constant). Verify with `gh api repos/{o
 
 Each reviewer has a different completion signal. **The polling check must validate that the review pertains to `ITERATION_HEAD` (current HEAD), not a stale review from a prior iteration on the same PR.**
 
-- **`/review`** (deep mode only): returns control to this session when done. Synchronous from our perspective. Lean mode skips this — only Gemini and Copilot are awaited.
+- **`/review`** (deep mode only): returns control to this session when done. Synchronous from the orchestrator's perspective. Lean mode skips this — only Gemini and Copilot are awaited.
 
 - **Gemini**: posts an issue comment with `<!-- GEMINI_REVIEW -->` marker, plus inline comments with `<!-- GEMINI_INLINE -->` marker. Poll every 30s, timeout 10 min:
 

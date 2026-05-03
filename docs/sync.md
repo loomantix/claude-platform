@@ -15,7 +15,7 @@ Each consumer repo drops in `.github/workflows/sync-from-upstream.yml` (copied f
 1. Shallow-clones the upstream repo at the pinned `UPSTREAM_REF` tag (defaults to `sync-v1`).
 2. Runs [`scripts/sync-engine.py`](../scripts/sync-engine.py) against the consumer working tree.
 3. If the working tree changed, opens a PR titled `Sync from <upstream-repo>`.
-4. Closes any prior open sync PR — humans either merged it or rejected it; we don't accumulate. The closed PR's review comments persist on GitHub; only the head branch is deleted.
+4. Closes any prior open sync PR — humans either merged it or rejected it; the workflow doesn't accumulate stale sync PRs. The closed PR's review comments persist on GitHub; only the head branch is deleted.
 
 A reviewer merges the PR; once merged, the next `git pull` on a developer's machine surfaces the changes.
 

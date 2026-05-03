@@ -54,7 +54,7 @@ The chain is recommended on every source-code PR but not enforced — there's no
 
 ## Why this shape
 
-- **`/simplify` is refactor-positive by design.** Pre-push, that's exactly what we want — consolidate fresh code freely. Bot reviewers (Copilot, Gemini) post-push are scope-controlled by `copilot-instructions.md` precisely because expanding scope post-PR creates review burden. Different stages, different stances.
+- **`/simplify` is refactor-positive by design.** Pre-push, that's the intended stance — consolidate fresh code freely. Bot reviewers (Copilot, Gemini) post-push are scope-controlled by `copilot-instructions.md` precisely because expanding scope post-PR creates review burden. Different stages, different stances.
 - **Auto-trigger of Copilot and Gemini is intentionally OFF.** Both are configured manual-only. This gives cost control on Gemini (Flash is $0.05–$0.20, Pro is $1–$8 — auto-firing on every iteration push burns money), audit-trail completeness (the PR comment history captures the full dialogue), and predictable reviewer state (no bot reviewing a stale commit while a fix push is in flight).
 - **`/reviewit` is the only path that fires AI review.** Don't try to manually `gh workflow run "Gemini Code Review"` or request Copilot as a reviewer outside the skill — the skill handles ordering, deduplication, and reply threading. Manual invocation outside the skill produces orphaned findings.
 - **No push-gate.** The chain is trust-based, not enforced. The cost of a PreToolUse gate (extra manual approvals on every push) outweighed the belt-and-suspenders value once the skills themselves were stable. Skipping `/refactorpass` shows up in post-process audits, not as a push-time block.

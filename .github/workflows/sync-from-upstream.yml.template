@@ -94,7 +94,8 @@ jobs:
           set -euo pipefail
           # Wipe any prior clone — on warm runners or rerun-failed jobs,
           # `git remote add origin` fails if the dir already exists with
-          # state, and we'd silently end up working against stale content.
+          # state, and the workflow would silently end up working against
+          # stale content.
           rm -rf /tmp/upstream
           mkdir -p /tmp/upstream
           cd /tmp/upstream

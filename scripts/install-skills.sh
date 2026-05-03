@@ -66,9 +66,9 @@ for src in "$SKILLS_SRC"/*/; do
 
   if [ -L "$target" ]; then
     # `readlink "$target"` returns the literal symlink content (portable
-    # across GNU and BSD). We always create symlinks with absolute paths,
-    # so a literal-vs-resolved comparison against `src_resolved` is
-    # exact for our own links.
+    # across GNU and BSD). This script always creates symlinks with
+    # absolute paths, so a literal-vs-resolved comparison against
+    # `src_resolved` is exact for symlinks it manages.
     current="$(readlink "$target")"
     if [ "$current" = "$src_resolved" ]; then
       echo "  ✓ $name (already linked)"

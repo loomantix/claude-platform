@@ -53,7 +53,7 @@ The full DCO text is at https://developercertificate.org/. By signing off, you a
 
 ## Sync-mechanism rules
 
-- Changes to `scripts/sync-engine.py` or `scripts/create-signed-commit.py` are **fleet-propagating** — they ship to every consumer on the next `sync-v1` retag. Treat these as the highest-stakes files in the repo. Add tests where the existing surface lacks them; review extra carefully for path-traversal, token-exfil, or unintended-write paths.
+- Changes to `scripts/sync-engine.py` or `scripts/create-signed-commit.py` are **sync-propagating** — they ship to every consumer on the next `sync-v1` retag. Treat these as the highest-stakes files in the repo. Add tests where the existing surface lacks them; review extra carefully for path-traversal, token-exfil, or unintended-write paths.
 - New entries in `scripts/sync-targets.yml.example` should mirror what a real consumer would have. Keep the example minimal and well-commented.
 
 ## Security

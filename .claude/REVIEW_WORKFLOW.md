@@ -104,7 +104,7 @@ There's currently NO hard gate forcing `/reviewit` to be invoked once a PR is op
 
 When a consumer needs **verified commits** on sync PRs (e.g. for SOC 2 controls), the upstream-sync workflow can be configured to:
 
-1. Authenticate as a GitHub App (org-installed with `contents: write` + `pull_requests: write`) via `actions/create-github-app-token@v1`. Required secrets on the consumer: `<APP_ID>`, `<APP_PRIVATE_KEY>` (named per the consumer's convention).
+1. Authenticate as a GitHub App (org-installed with `contents: write` + `pull_requests: write`) via `actions/create-github-app-token@v1`. Required secrets on the consumer: `SYNC_APP_ID`, `SYNC_APP_PRIVATE_KEY` (rename in the workflow file if your conventions differ).
 2. Create commits via the GitHub Contents API (`git/blobs` → `git/trees` → `git/commits` → `git/refs`) rather than `git commit` + `git push`. Commits made via the API path are auto-signed by GitHub: `committer: GitHub`, `verified: true`.
 
 This decouples the committer (the App identity) from any human reviewer, so reviewers can approve sync PRs without violating segregation-of-duties controls. The reference template lives at `.github/workflows/sync-from-upstream.yml.template`; the API-side commit creation lives at `scripts/create-signed-commit.py` and runs from the cloned upstream repo at sync time.

@@ -153,7 +153,12 @@ def parse_status(consumer_dir: Path) -> tuple[list[str], list[str]]:
             # For copies (C), the source stays in place — no delete.
             continue
 
-        if "D" in code and not (consumer_dir / path).exists():
+        # Trust the git status code: `D` is a delete regardless of whether
+        # the file currently exists on disk. Re-checking `.exists()` here
+        # introduced a TOCTOU window where a recreated file would be
+        # misclassified as an upsert and re-uploaded to the tree instead
+        # of removed from it.
+        if "D" in code:
             deletes.append(path)
         else:
             upserts.append(path)
@@ -183,6 +188,15 @@ def main() -> int:
     consumer_dir = args.consumer_dir.resolve()
     owner_repo = f"{args.owner}/{args.repo}"
 
+    # Refuse to force-update the base branch onto itself. A typo / hostile
+    # caller passing `--new-branch == --base-branch` would otherwise fast-
+    # forward main onto the sync commit via the force PATCH at the end.
+    if args.new_branch == args.base_branch:
+        sys.stderr.write(
+            f"refusing to operate: --new-branch and --base-branch are the same ({args.new_branch})\n"
+        )
+        return 2
+
     upserts, deletes = parse_status(consumer_dir)
     if not upserts and not deletes:
         print("No changes to commit.")
@@ -202,12 +216,13 @@ def main() -> int:
 
     for path in upserts:
         full = consumer_dir / path
-        # Defensive: even with `-uall`, skip anything that isn't a regular
-        # file (broken symlinks, sockets, directories that slipped through).
-        # Better to skip a malformed entry than crash the whole sync.
+        # Even with `-uall`, an upsert path that isn't a regular file
+        # (broken symlink, socket, directory) is a hard error: skipping it
+        # silently would let the sync claim success while quietly dropping
+        # files from the tree. Fail loudly instead.
         if not full.is_file():
-            sys.stderr.write(f"  ⚠️  skipping non-file upsert: {path}\n")
-            continue
+            sys.stderr.write(f"  ❌ upsert path is not a regular file: {path}\n")
+            return 1
         content = full.read_bytes()
         blob = github_api(
             "POST",

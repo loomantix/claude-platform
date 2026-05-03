@@ -83,7 +83,7 @@ gh issue comment <n> --body-file /tmp/issue-comment.md
 
 ## start \<n\>
 
-Claim + create working branch off the repo's default branch. The default branch is auto-detected (`main`, `staging`, etc.) via the upstream HEAD ref so this works across the fleet without per-repo config:
+Claim + create working branch off the repo's default branch. The default branch is auto-detected (`main`, `staging`, etc.) via the upstream HEAD ref so this works across consumer repos without per-repo config:
 
 ```bash
 gh issue edit <n> --add-assignee @me

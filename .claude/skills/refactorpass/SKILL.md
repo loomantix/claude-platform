@@ -82,7 +82,7 @@ The skill wraps Claude Code's built-in `/simplify` and adds two things `/simplif
      fi
      ```
 
-     Write the one-line summary based on the files touched. Examples: `"consolidate billing-store error paths into helper"`, `"remove unused imports across api worker module"`, `"extract repeat-3 PHI redaction into shared util"`. If the changes touched many unrelated areas, use `"multiple cleanup spots — see diff"`.
+     Write the one-line summary based on the files touched. Examples: `"consolidate config-loader error paths into helper"`, `"remove unused imports across api worker module"`, `"extract repeated input-validation block into shared util"`. If the changes touched many unrelated areas, use `"multiple cleanup spots — see diff"`.
 
 ---
 

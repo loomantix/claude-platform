@@ -104,7 +104,7 @@ Substitution is plain `<<KEY>>` find-and-replace — no template engine. Multi-l
 ## Adding a new consumer
 
 1. **Verify the upstream-read secret exists** if the upstream repo is private. Set `UPSTREAM_READ_TOKEN` (fine-grained PAT or GitHub App token with `Contents: Read` on the upstream repo) on the consumer repo (or as an org-level secret scoped to the consumer). For public upstream repos, no token is needed.
-2. **Verify App-token secrets exist** if you want signed sync commits. The reference template uses `<APP_ID>` + `<APP_PRIVATE_KEY>` from secrets. Adjust to match your conventions.
+2. **Verify App-token secrets exist** if you want signed sync commits. The reference template reads `SYNC_APP_ID` + `SYNC_APP_PRIVATE_KEY` from secrets — rename in the workflow file if your conventions differ.
 3. Create `.platform-config.yml` at the consumer's root with values for every placeholder used by any templated target.
 4. Copy `.github/workflows/sync-from-upstream.yml.template` to `.github/workflows/sync-from-upstream.yml` (drop the `.template` suffix), then fill in `UPSTREAM_REPO` and the secret names.
 5. Manually trigger the workflow once (`gh workflow run "Sync from upstream"`) to verify the first PR opens cleanly.

@@ -37,7 +37,9 @@ def fetch_issues(extra_args: list[str]) -> list[dict[str, Any]]:
         "--json", "number,title,body,labels,assignees,url",
         *extra_args,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # 60s timeout: a hung GitHub API can otherwise stall callers (e.g.
+    # /agent-loop) that depend on this probe to advance.
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
         sys.exit(result.returncode)
@@ -57,7 +59,7 @@ def fetch_all_open_numbers() -> set[int]:
             "--state", "open", "--limit", "1000",
             "--json", "number",
         ],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=60,
     )
     if result.returncode != 0:
         sys.stderr.write(result.stderr)

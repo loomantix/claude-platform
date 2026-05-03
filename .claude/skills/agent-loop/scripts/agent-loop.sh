@@ -72,10 +72,19 @@ if [ -z "$COLLECTION_BRANCH" ]; then
     COLLECTION_BRANCH="ralph-$(date +%Y%m%d-%H%M%S)-$(head -c2 /dev/urandom | xxd -p)"
 fi
 
+# Reject branch names with `..` segments or non-portable characters before
+# the name is used to build a /tmp path. The realistic-escape risk is bounded
+# by the trailing -$$ PID anchor, but cheap to defend properly.
+if ! [[ "$COLLECTION_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "$COLLECTION_BRANCH" == *..* ]]; then
+    echo -e "\033[0;31m✗\033[0m collection-branch contains illegal characters: $COLLECTION_BRANCH"
+    echo "   allowed: [A-Za-z0-9._/-], no '..' segments"
+    exit 1
+fi
+
 # Walk up from the script's directory to the repo root rather than assuming
 # a fixed depth — the script lives under .claude/skills/agent-loop/scripts/
-# when synced into a consumer, but a developer might also run it from a
-# checked-out platform clone where the layout differs.
+# when synced into a consumer, but a developer might also run it from an
+# upstream clone where the layout differs.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # `|| true` prevents `set -e` from aborting on a non-zero `git rev-parse`
 # (e.g., script run outside any git repo) before the friendly check below.

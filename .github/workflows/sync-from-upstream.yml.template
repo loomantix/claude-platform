@@ -109,8 +109,19 @@ jobs:
             git config http.extraheader "$AUTH_HEADER"
           fi
           git remote add origin "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch --depth=1 origin "refs/tags/${UPSTREAM_REF}:refs/tags/${UPSTREAM_REF}" 2>/dev/null \
-            || git fetch --depth=1 origin "${UPSTREAM_REF}"
+          # Disambiguate via ls-remote so that auth/network failures fail
+          # loud at the probe step rather than falling through into a
+          # branch fetch (which would silently ship branch content as a
+          # "verified sync from <tag>" — exactly what the trust model
+          # promises won't happen).
+          if git ls-remote --tags --exit-code origin "${UPSTREAM_REF}" >/dev/null; then
+            git fetch --depth=1 origin "refs/tags/${UPSTREAM_REF}:refs/tags/${UPSTREAM_REF}"
+          elif git ls-remote --heads --exit-code origin "${UPSTREAM_REF}" >/dev/null; then
+            git fetch --depth=1 origin "${UPSTREAM_REF}"
+          else
+            echo "::error::UPSTREAM_REF '${UPSTREAM_REF}' is neither a tag nor a branch on ${UPSTREAM_REPO}." >&2
+            exit 1
+          fi
           git checkout -q FETCH_HEAD
 
       - name: Set up Python
@@ -132,7 +143,11 @@ jobs:
         id: diff
         run: |
           set -euo pipefail
-          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+          # `git status --porcelain` covers staged + unstaged + untracked in
+          # one call. The earlier `git diff --quiet` + ls-files combo missed
+          # staged changes, which would silently report "in sync" while the
+          # engine had actually written files.
+          if [ -z "$(git status --porcelain)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "✅ Already in sync with upstream"
           else

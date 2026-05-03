@@ -42,8 +42,7 @@ repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
 cd "$repo_root"
 
 FILES=(
-  .github/workflows/sync-from-platform.yml.template
-  scripts/sync-from-platform-workflow-template.yml
+  .github/workflows/sync-from-upstream.yml.template
 )
 
 declare -A upstream_cache  # spans both files — same Action+version → one API roundtrip

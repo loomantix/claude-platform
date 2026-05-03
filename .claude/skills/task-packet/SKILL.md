@@ -55,7 +55,7 @@ You are given a **Task Packet** in markdown. Your job is to **execute it end-to-
 2. If **Risk = high** or the task involves:
    - Database schema changes
    - Infra/cluster changes
-   - Changes touching PHI/PII handling in a health context  
+   - Changes touching regulated-data handling (PHI, PII, PCI, secrets, etc.)
      → Ask for explicit confirmation from the user before proceeding.
 
 3. Once confirmed (or if clearly safe/low-risk), begin executing the packet.

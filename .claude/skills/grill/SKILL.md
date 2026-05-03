@@ -70,7 +70,7 @@ Run the full agent matrix:
 | Try/catch, error-handling, fallback logic, async paths | `pr-review-toolkit:silent-failure-hunter` |
 | New types, modified type definitions, generics changes | `pr-review-toolkit:type-design-analyzer` |
 | New large doc comments / docstrings, JSDoc on exports | `pr-review-toolkit:comment-analyzer` |
-| Auth, crypto, PHI/PII handling, input validation, secret handling, SQL composition | Built-in `/security-review` skill |
+| Auth, crypto, regulated-data handling (PHI/PII/PCI/secrets), input validation, SQL composition | Built-in `/security-review` skill |
 | New tests, modified test scope on a fix/feature PR | `pr-review-toolkit:pr-test-analyzer` |
 
 Pick the signals present in the diff — don't run every agent on every PR. Two to five agents is typical in deep mode.
@@ -156,7 +156,7 @@ Next:
   /reviewit <pr-number> deep     # full (/review + Gemini + Copilot, 4 iters)
 ```
 
-If lean mode was used and the changeset touches load-bearing surfaces (auth, crypto, schema migrations, sync mechanism, fleet-propagating files under `.claude/skills/**` or `scripts/sync*`), append:
+If lean mode was used and the changeset touches load-bearing surfaces (auth, crypto, schema migrations, sync mechanism, sync-propagating files under `.claude/skills/**` or `scripts/sync*`), append:
 
 ```
 ℹ️  This change touches load-bearing surfaces. Consider re-running via /deepgrill

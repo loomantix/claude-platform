@@ -4,7 +4,7 @@ Canonical files (Claude Code skills, the Copilot instructions template, optional
 
 ## What flows where
 
-The single-source-of-truth list is [`scripts/sync-targets.yml`](../scripts/sync-targets.yml.example) (your consumer maintains its own — see "Adding a new consumer" below). Each entry maps a file in the upstream repo to a destination path in the consumer, optionally with placeholder substitution (`<<KEY>>` form) resolved from the consumer's `.platform-config.yml`.
+The single-source-of-truth list is [`scripts/sync-targets.yml`](../scripts/sync-targets.yml) — it lives in the **upstream** repo (this one, or a fork). Consumers don't author it; they only opt out of specific entries via `skip_targets` in `.platform-config.yml`. Each entry maps a file in the upstream repo to a destination path in the consumer, optionally with placeholder substitution (`<<KEY>>` form) resolved from the consumer's `.platform-config.yml`.
 
 A target with `delete: true` removes the destination from the consumer instead of writing to it (and prunes any empty parent directories). Use this to retire a previously-synced file across all consumers.
 

@@ -61,15 +61,13 @@ Edit:
 - The `Validate UPSTREAM_READ_TOKEN is configured` step — remove entirely if your upstream is public.
 - The `Clone upstream` step — if your upstream is public, the auth-header logic still works (it's a no-op when `UPSTREAM_READ_TOKEN` is empty), but you can simplify if you want.
 
-## 3. Create `scripts/sync-targets.yml` on the consumer
+## 3. (Skip) The sync manifest is upstream-owned
 
-The manifest lives in **the upstream repo**, not the consumer. Wait — re-read this paragraph carefully, since the on-disk layout is unintuitive at first.
+The sync engine reads [`scripts/sync-targets.yml`](../scripts/sync-targets.yml) from the **upstream** checkout (the cloned-into-`/tmp` copy of the upstream repo). The manifest is upstream-owned, not consumer-owned — you don't author one in your consumer.
 
-The sync engine reads `sync-targets.yml` from the **upstream** checkout (the cloned-into-`/tmp` copy of the upstream repo), so the manifest is upstream-owned. If you're using `loomantix/claude-platform` directly, the manifest already exists there and ships the full skill set.
+If you're using `loomantix/claude-platform` directly, the manifest already exists there and ships the full skill set. To opt out of specific files for one consumer, list them in `skip_targets` inside that consumer's `.platform-config.yml` (see step 1).
 
-If you forked `loomantix/claude-platform` and want to customize what gets synced (drop a skill that isn't relevant, add one of your own), edit `scripts/sync-targets.yml` in your fork, not in the consumer.
-
-The example manifest is at [`scripts/sync-targets.yml.example`](../scripts/sync-targets.yml.example). Copy it to `scripts/sync-targets.yml` in your fork and adjust.
+If you forked `loomantix/claude-platform` and want to customize what gets synced for **all** of your consumers (drop a skill that isn't relevant fleet-wide, add one of your own), edit `scripts/sync-targets.yml` in your fork.
 
 ## 4. Set the App-token secrets on the consumer
 

@@ -68,8 +68,8 @@ jobs:
             python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" "$f"
           done
 
-  sync-targets-example:
-    name: sync-targets.yml.example matches schema
+  sync-targets:
+    name: sync-targets.yml matches schema
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,11 +77,11 @@ jobs:
         with:
           python-version: '3.12'
       - run: python3 -m pip install 'pyyaml==6.0.2'
-      - name: Validate the example manifest parses + has expected shape
+      - name: Validate the canonical manifest parses + has expected shape
         run: |
           python3 - <<'PY'
           import yaml, sys
-          doc = yaml.safe_load(open('scripts/sync-targets.yml.example'))
+          doc = yaml.safe_load(open('scripts/sync-targets.yml'))
           targets = doc.get('targets')
           assert isinstance(targets, list) and targets, "targets must be a non-empty list"
           for t in targets:

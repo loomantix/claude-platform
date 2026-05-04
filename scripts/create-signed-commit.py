@@ -208,6 +208,37 @@ def parse_status(consumer_dir: Path) -> StatusChanges:
     return StatusChanges(upserts=upserts, deletes=deletes)
 
 
+def derive_signoff_trailer(token: str) -> str:
+    """Build a `Signed-off-by:` trailer for the App's identity.
+
+    Looks up the actor via `GET /user` (resolves to the App's bot user when
+    called with an installation token). Returns a trailer like:
+
+        Signed-off-by: loomantix[bot] <12345+loomantix[bot]@users.noreply.github.com>
+
+    Consumers that gate PRs on DCO (grep for `^Signed-off-by: .+ <.+@.+>$`)
+    will then accept the sync commit without needing a per-consumer bot
+    exemption. Harmless for consumers that don't enforce DCO.
+    """
+    user = github_api("GET", "/user", token)
+    login = user["login"]
+    user_id = user["id"]
+    email = f"{user_id}+{login}@users.noreply.github.com"
+    return f"Signed-off-by: {login} <{email}>"
+
+
+def with_signoff(message: str, trailer: str) -> str:
+    """Append a Signed-off-by trailer if not already present.
+
+    Idempotent: if the caller already supplied a `Signed-off-by:` line in
+    `--message`, returns the message unchanged. Otherwise appends with a
+    blank-line separator so the trailer parses as a footer.
+    """
+    if "Signed-off-by:" in message:
+        return message
+    return f"{message.rstrip()}\n\n{trailer}\n"
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--owner", required=True)
@@ -292,11 +323,16 @@ def main() -> int:
     # 4. Create the commit. GitHub auto-signs commits created via this
     #    endpoint when the token is from a GitHub App — committer becomes
     #    "GitHub", verification: valid.
+    #
+    #    The Signed-off-by trailer is appended automatically using the
+    #    bot's identity (resolved via /user). Consumers that gate PRs on
+    #    DCO accept the resulting commit without a per-consumer exemption.
+    full_message = with_signoff(args.message, derive_signoff_trailer(token))
     new_commit = github_api(
         "POST",
         f"/repos/{owner_repo}/git/commits",
         token,
-        {"message": args.message, "tree": new_tree["sha"], "parents": [base_sha]},
+        {"message": full_message, "tree": new_tree["sha"], "parents": [base_sha]},
     )
 
     # 5. Create or force-update the new-branch ref.

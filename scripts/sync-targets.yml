@@ -1,15 +1,19 @@
-# Example sync-targets.yml — copy and adapt for your upstream repo.
+# Canonical sync manifest for claude-platform.
 #
-# This manifest tells `sync-engine.py` which files to copy from the upstream
-# repo into a consumer, and which placeholder tokens (`<<KEY>>` form) to
-# substitute using values from the consumer's `.platform-config.yml`.
+# `sync-engine.py` reads this file from the upstream checkout (this repo, or
+# a fork of it) to learn which files to copy into a consumer repo, and which
+# `<<KEY>>` placeholders to substitute from the consumer's
+# `.platform-config.yml`.
 #
 # `substitutions: []` means verbatim copy. `delete: true` causes the engine
 # to remove the destination from the consumer (and prune empty parent
 # directories) — use this to retire a previously-synced file across all
 # consumers. `mode` (e.g. `"0755"`) sets the destination permissions.
 #
-# Adding a new file to the sync surface = add an entry here.
+# Adding a new file to the sync surface = add an entry here. Consumers that
+# don't want a particular file can opt out via `skip_targets` in their own
+# `.platform-config.yml`; forks that want to drop or add files entirely can
+# edit this manifest in the fork.
 
 targets:
   # Claude Code skills — checked into consumer repo so teammates without the

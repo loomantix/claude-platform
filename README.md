@@ -66,7 +66,7 @@ See [`docs/getting-started.md`](docs/getting-started.md) for the full walkthroug
 
 1. Create a `.platform-config.yml` at the consumer's root with the substitution values.
 2. Copy `.github/workflows/sync-from-upstream.yml.template` → `.github/workflows/sync-from-upstream.yml`, fill in `UPSTREAM_REPO`.
-3. Create a `scripts/sync-targets.yml` (consumer-owned) listing which upstream files to pull. Use [`scripts/sync-targets.yml.example`](scripts/sync-targets.yml.example) as a starting point.
+3. (Skip — the manifest [`scripts/sync-targets.yml`](scripts/sync-targets.yml) is upstream-owned and ships the full skill set. Forks can edit it to add or drop entries.)
 4. Set the App-token secrets on the consumer (or as org-level secrets).
 5. Run the workflow once via `gh workflow run "Sync from upstream"` — the first PR opens cleanly.
 

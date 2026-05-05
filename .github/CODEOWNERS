@@ -1,0 +1,16 @@
+# Every merge to claude-platform main requires explicit approval from a code
+# owner. Combined with branch protection's `require_code_owner_reviews: true`
+# and `required_approving_review_count: 1`, this means: no PR (including the
+# maintainer's own — admin can still bypass for solo work) reaches main
+# without a deliberate approval click.
+#
+# Rationale: claude-platform's `sync-v1` propagates to private consumer repos
+# (loomantix/{platform,activescribe,activetime,activetrust,activeemr,billing-substrate}).
+# A merged-but-malicious commit here can flow into consumer CI with org-write
+# tokens. Requiring an explicit per-PR approval is the cheapest defense
+# against subtle skill / sync-engine weaponization until the structural
+# mitigations (sandboxed engine, consumer-side destination allowlist) land.
+#
+# CODEOWNERS syntax: https://docs.github.com/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
+
+*       @BaxterDevs

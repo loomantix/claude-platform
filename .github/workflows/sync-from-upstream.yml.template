@@ -187,12 +187,17 @@ jobs:
           # `committer: GitHub`, `verified: true`.
           OWNER="${GITHUB_REPOSITORY%/*}"
           REPO="${GITHUB_REPOSITORY#*/}"
+          # `--app-slug` makes the script append a Signed-off-by trailer
+          # to the commit message, so consumer DCO checks accept it
+          # without per-repo bot exemptions. The slug comes from
+          # actions/create-github-app-token's output.
           python3 /tmp/upstream/scripts/create-signed-commit.py \
             --owner "$OWNER" \
             --repo "$REPO" \
             --base-branch "${PR_BASE_BRANCH}" \
             --new-branch "$BRANCH" \
             --message "chore: sync from ${UPSTREAM_REPO}@${UPSTREAM_REF}" \
+            --app-slug "${{ steps.app-token.outputs.app-slug }}" \
             --consumer-dir .
 
           # Open the PR (or refresh title/body if it already exists for the

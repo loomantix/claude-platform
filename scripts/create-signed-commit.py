@@ -208,6 +208,43 @@ def parse_status(consumer_dir: Path) -> StatusChanges:
     return StatusChanges(upserts=upserts, deletes=deletes)
 
 
+def derive_signoff_trailer(app_slug: str) -> str:
+    """Build a `Signed-off-by:` trailer for the App's identity.
+
+    GitHub assigns each App a bot user named `<slug>[bot]`. We use that
+    plus the canonical `users.noreply.github.com` domain to construct a
+    trailer like:
+
+        Signed-off-by: loomantix[bot] <loomantix[bot]@users.noreply.github.com>
+
+    The caller (the sync workflow) supplies `app_slug`, which it gets as
+    an output of `actions/create-github-app-token`. We don't look it up
+    via `GET /app` because that endpoint requires JWT auth, not an
+    installation token, and `GET /user` returns 403 for installation
+    tokens ("Resource not accessible by integration").
+
+    The bot's numeric user id (which would normally appear before the `+`
+    in the noreply email) is omitted — the DCO regex
+    (`^Signed-off-by: .+ <.+@.+>$`) accepts the slug-only form, and
+    fetching the id would require an extra unauthenticated `/users/<bot>`
+    call for no observable benefit.
+    """
+    name = f"{app_slug}[bot]"
+    return f"Signed-off-by: {name} <{name}@users.noreply.github.com>"
+
+
+def with_signoff(message: str, trailer: str) -> str:
+    """Append a Signed-off-by trailer if not already present.
+
+    Idempotent: if the caller already supplied a `Signed-off-by:` line in
+    `--message`, returns the message unchanged. Otherwise appends with a
+    blank-line separator so the trailer parses as a footer.
+    """
+    if "Signed-off-by:" in message:
+        return message
+    return f"{message.rstrip()}\n\n{trailer}\n"
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--owner", required=True)
@@ -217,6 +254,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--message", required=True, help="commit message")
     p.add_argument("--consumer-dir", required=True, type=Path)
     p.add_argument("--token-env", default="GH_APP_TOKEN", help="env var holding the App installation token")
+    p.add_argument(
+        "--app-slug",
+        default=None,
+        help=(
+            "App slug (e.g. 'loomantix') for the Signed-off-by trailer. "
+            "Pass `${{ steps.app-token.outputs.app-slug }}` from the workflow. "
+            "If omitted, no DCO trailer is appended (consumers that enforce "
+            "DCO will then need a per-repo bot exemption)."
+        ),
+    )
     return p.parse_args()
 
 
@@ -292,11 +339,20 @@ def main() -> int:
     # 4. Create the commit. GitHub auto-signs commits created via this
     #    endpoint when the token is from a GitHub App — committer becomes
     #    "GitHub", verification: valid.
+    #
+    #    The Signed-off-by trailer is appended when `--app-slug` is given,
+    #    so consumers that gate PRs on DCO accept the resulting commit
+    #    without needing a per-consumer bot exemption.
+    full_message = (
+        with_signoff(args.message, derive_signoff_trailer(args.app_slug))
+        if args.app_slug
+        else args.message
+    )
     new_commit = github_api(
         "POST",
         f"/repos/{owner_repo}/git/commits",
         token,
-        {"message": args.message, "tree": new_tree["sha"], "parents": [base_sha]},
+        {"message": full_message, "tree": new_tree["sha"], "parents": [base_sha]},
     )
 
     # 5. Create or force-update the new-branch ref.

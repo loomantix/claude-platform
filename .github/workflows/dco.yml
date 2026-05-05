@@ -26,7 +26,7 @@ jobs:
             if ! git show -s --format='%B' "$sha" | grep -qE '^Signed-off-by: .+ <.+@.+>$'; then
               missing+=("$sha")
             fi
-          done < <(git rev-list "$base..$head")
+          done < <(git rev-list --no-merges "$base..$head")
           if [ ${#missing[@]} -ne 0 ]; then
             echo "::error::The following commits are missing a DCO sign-off (Signed-off-by trailer):"
             for sha in "${missing[@]}"; do

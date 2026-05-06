@@ -28,7 +28,7 @@ Out of scope:
 
 - Vulnerabilities in upstream dependencies (PyYAML, GitHub Actions used by the workflow templates) — please report to the upstream.
 - Vulnerabilities in Claude itself or in the Claude Code CLI — report to Anthropic.
-- Misconfiguration of a *consumer* repo (e.g. a consumer setting `SYNC_APP_PRIVATE_KEY` to an over-privileged App). The consumer owns its threat model.
+- Misconfiguration of a _consumer_ repo (e.g. a consumer setting `SYNC_APP_PRIVATE_KEY` to an over-privileged App). The consumer owns its threat model.
 
 ## Disclosure policy
 

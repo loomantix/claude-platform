@@ -23,7 +23,7 @@ This replaces the older `/review-cycle` skill. Auto-trigger of Gemini and Copilo
 - **Full auto by default**: once the PR number is provided, do not ask for confirmation between phases. Fix everything fixable, defer what isn't, dismiss false positives. Present the summary at the end.
 - **Reviewers are complementary**: each catches things the others miss. Unique findings are the primary value. Overlap is acknowledged in replies but not dwelt on.
 - **Deduplicate before acting**: don't fix the same thing twice (lean) or three times (deep).
-- **Reply to every comment** *after* the push has produced the real commit SHA: for fixes, post the commit SHA; for deferrals, link the tracking issue; for dismissals, record the rationale. Replies happen in Phase 4 step 4, not in Phase 3 — Phase 3 only records resolutions to `/tmp`. The reply step is the most-skipped step in this skill; do not fold it into "commit + push" or treat it as optional.
+- **Reply to every comment** _after_ the push has produced the real commit SHA: for fixes, post the commit SHA; for deferrals, link the tracking issue; for dismissals, record the rationale. Replies happen in Phase 4 step 4, not in Phase 3 — Phase 3 only records resolutions to `/tmp`. The reply step is the most-skipped step in this skill; do not fold it into "commit + push" or treat it as optional.
 - **Cap at `MAX_ITERS` review iterations**: each iteration is `(fire reviewers → parse → fix → push → reply)`. After `MAX_ITERS`, stop and hand back to the user. The reply step is part of an iteration's completion criteria — an iteration that pushes fixes but doesn't post replies is incomplete. If a PR needs more than the cap, it's signaling something deeper (scope too large, or repeated regressions).
 - **No per-iter `/refactorpass`**: review-fix commits push directly. The base was refactor-passed pre-push, and re-running `/simplify` on small surgical fixes has been validated to add negligible value.
 
@@ -89,7 +89,7 @@ ITERATION_HEAD=$(gh pr view <pr-number> --json headRefOid --jq '.headRefOid')
 ITERATION_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 ```
 
-Capture the current state of comments / reviews so polling can detect *new* posts (not pre-existing ones from earlier iterations or runs):
+Capture the current state of comments / reviews so polling can detect _new_ posts (not pre-existing ones from earlier iterations or runs):
 
 ```bash
 # Fetch existing comments to detect already-posted reviews
@@ -159,11 +159,11 @@ Each reviewer has a different completion signal. **The polling check must valida
 
 - **Copilot**: posts findings via one of three modes — check **both** the reviews endpoint and the inline-comments endpoint, treat either signal as completion. Poll every 30s, timeout 10 min:
 
-  | Mode | `pulls/<n>/reviews` row? | `pulls/<n>/comments` rows? |
-  |---|---|---|
-  | Review with findings | yes (`state: COMMENTED`) | yes (one per finding) |
-  | **Findings without review** | **no** | **yes** |
-  | Approved with no findings | yes (`state: APPROVED`) | no |
+  | Mode                        | `pulls/<n>/reviews` row? | `pulls/<n>/comments` rows? |
+  | --------------------------- | ------------------------ | -------------------------- |
+  | Review with findings        | yes (`state: COMMENTED`) | yes (one per finding)      |
+  | **Findings without review** | **no**                   | **yes**                    |
+  | Approved with no findings   | yes (`state: APPROVED`)  | no                         |
 
   Mode 2 is real and observed in production. Polling only the reviews endpoint times out in this case while Copilot has already posted findings inline.
 
@@ -254,10 +254,12 @@ In **deep mode**, parse whatever `/review` produced — in-session output or PR-
 ### Deduplicate across reviewers
 
 Two findings are duplicates if they:
+
 - Reference the same file AND same line range (±5 lines), OR
 - Reference the same file AND describe the same issue (semantic match)
 
 For each group, classify:
+
 - **Lean mode**: `pair_overlap` (Gemini + Copilot caught it) or `unique` (only one reviewer)
 - **Deep mode**: `triple_overlap` (all three), `pair_overlap` (any two), or `unique`
 
@@ -371,8 +373,8 @@ For each deduplicated finding, ordered by severity (critical first):
 4. **Post replies now that the real SHA is in hand.** Read `/tmp/pr-<pr-number>-iter-<N>-resolutions.json` and post one reply per row. **Do not skip this step** — fixes without replies leave reviewer threads orphaned. Build the body with `${PUSHED_SHA_SHORT}` substituted inline.
 
    Reply body templates:
-
    - **Fix** (single reviewer):
+
      ```
      Fixed in `${PUSHED_SHA_SHORT}`.
 
@@ -380,6 +382,7 @@ For each deduplicated finding, ordered by severity (critical first):
      ```
 
    - **Fix** (overlapping — `also_flagged_by` non-empty):
+
      ```
      Fixed in `${PUSHED_SHA_SHORT}`.
 
@@ -389,6 +392,7 @@ For each deduplicated finding, ordered by severity (critical first):
      ```
 
    - **Defer**:
+
      ```
      Deferred — tracking in <defer_issue_url>.
 
@@ -396,6 +400,7 @@ For each deduplicated finding, ordered by severity (critical first):
      ```
 
    - **Dismiss**:
+
      ```
      Dismissing — false positive.
 
@@ -403,14 +408,15 @@ For each deduplicated finding, ordered by severity (critical first):
      ```
 
    Endpoints (route by `reviewer` field):
-
    - `copilot`, `gemini-inline`, `review` (when `finding_id` is non-null):
+
      ```bash
      gh api -X POST repos/{owner}/{repo}/pulls/<pr-number>/comments/<finding_id>/replies \
        -f body="<assembled body>"
      ```
 
    - `gemini-summary` (no inline equivalent, post a top-level issue comment quoting the finding):
+
      ```bash
      gh api -X POST repos/{owner}/{repo}/issues/<pr-number>/comments \
        -f body="> <quoted summary finding text, prefixed with > on each line>

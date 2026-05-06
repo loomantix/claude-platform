@@ -53,9 +53,9 @@ Read `$ARGUMENTS`. If it equals `deep` (case-insensitive, ignore surrounding whi
 
 Run **at most two** agents:
 
-| Signal in diff | Agent |
-|---|---|
-| Always (source code present) | `pr-review-toolkit:code-reviewer` |
+| Signal in diff                                                               | Agent                                     |
+| ---------------------------------------------------------------------------- | ----------------------------------------- |
+| Always (source code present)                                                 | `pr-review-toolkit:code-reviewer`         |
 | Try/catch, error-handling, fallback logic, async paths, swallowed exceptions | `pr-review-toolkit:silent-failure-hunter` |
 
 Skip the others — they're available on `/deepgrill`. If the diff has none of the silent-failure signals, run only `code-reviewer`. If you're tempted to run more agents because the change "feels load-bearing," that's the signal to suggest `/deepgrill` to the user instead and exit.
@@ -64,14 +64,14 @@ Skip the others — they're available on `/deepgrill`. If the diff has none of t
 
 Run the full agent matrix:
 
-| Signal in diff | Agent |
-|---|---|
-| Always (source code present) | `pr-review-toolkit:code-reviewer` |
-| Try/catch, error-handling, fallback logic, async paths | `pr-review-toolkit:silent-failure-hunter` |
-| New types, modified type definitions, generics changes | `pr-review-toolkit:type-design-analyzer` |
-| New large doc comments / docstrings, JSDoc on exports | `pr-review-toolkit:comment-analyzer` |
-| Auth, crypto, regulated-data handling (PHI/PII/PCI/secrets), input validation, SQL composition | Built-in `/security-review` skill |
-| New tests, modified test scope on a fix/feature PR | `pr-review-toolkit:pr-test-analyzer` |
+| Signal in diff                                                                                 | Agent                                     |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| Always (source code present)                                                                   | `pr-review-toolkit:code-reviewer`         |
+| Try/catch, error-handling, fallback logic, async paths                                         | `pr-review-toolkit:silent-failure-hunter` |
+| New types, modified type definitions, generics changes                                         | `pr-review-toolkit:type-design-analyzer`  |
+| New large doc comments / docstrings, JSDoc on exports                                          | `pr-review-toolkit:comment-analyzer`      |
+| Auth, crypto, regulated-data handling (PHI/PII/PCI/secrets), input validation, SQL composition | Built-in `/security-review` skill         |
+| New tests, modified test scope on a fix/feature PR                                             | `pr-review-toolkit:pr-test-analyzer`      |
 
 Pick the signals present in the diff — don't run every agent on every PR. Two to five agents is typical in deep mode.
 

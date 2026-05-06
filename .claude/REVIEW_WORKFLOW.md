@@ -71,24 +71,24 @@ There's currently NO hard gate forcing `/reviewit` to be invoked once a PR is op
 
 ### Default (lean) path
 
-| Skill | When | What it does |
-|---|---|---|
-| `/refactorpass` | Before any push | Single `/simplify` pass + commit. Skips on docs-only. |
-| `/grill` | After `/refactorpass`, before push | code-reviewer + silent-failure-hunter (when relevant), user verifies findings. Skips on docs-only. |
-| `/reviewit <pr>` | After PR is open | Parallel Gemini Flash + Copilot, dedup, fix, reply, push, loop ≤2. Prompts on docs-only to skip paid reviewers. |
+| Skill            | When                               | What it does                                                                                                    |
+| ---------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `/refactorpass`  | Before any push                    | Single `/simplify` pass + commit. Skips on docs-only.                                                           |
+| `/grill`         | After `/refactorpass`, before push | code-reviewer + silent-failure-hunter (when relevant), user verifies findings. Skips on docs-only.              |
+| `/reviewit <pr>` | After PR is open                   | Parallel Gemini Flash + Copilot, dedup, fix, reply, push, loop ≤2. Prompts on docs-only to skip paid reviewers. |
 
 ### Deep path (high-risk or complex changes)
 
-| Skill | When | What it does |
-|---|---|---|
-| `/deepgrill` | Before push | Orchestrator: `/refactorpass` + `/grill deep` (full agent matrix). |
+| Skill                 | When             | What it does                                                                                          |
+| --------------------- | ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `/deepgrill`          | Before push      | Orchestrator: `/refactorpass` + `/grill deep` (full agent matrix).                                    |
 | `/reviewit <pr> deep` | After PR is open | Parallel `/review` + Gemini Flash + Copilot, dedup, fix, reply, push, loop ≤4. Full historical chain. |
 
 ### Retired
 
-| Skill | Status |
-|---|---|
-| `/pushit` | Replaced by `/reviewit`. Stub removed — old invocations resolve to nothing. |
+| Skill           | Status                                                                      |
+| --------------- | --------------------------------------------------------------------------- |
+| `/pushit`       | Replaced by `/reviewit`. Stub removed — old invocations resolve to nothing. |
 | `/review-cycle` | Replaced by `/reviewit`. Stub removed — old invocations resolve to nothing. |
 
 ---

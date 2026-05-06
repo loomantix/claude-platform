@@ -25,12 +25,12 @@ Flags (any order, after the port):
 
 The skill reads these once at start; surface anything missing as an actionable error rather than silently defaulting:
 
-| Variable          | Purpose                                                                                                         | Default                                   |
-| ----------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `PHONE_IP`        | LAN IP of the device. Set once per developer machine (e.g. in `~/.bashrc`).                                     | _required_ — fail fast if unset           |
-| `ANDROID_HOME`    | Path to Android SDK. The consumer's `just mobile-build-apk` recipe normally exports this; respect it if set.    | recipe-dependent                          |
-| `APK_OUTPUT_DIR`  | Where to drop the built APK. The consumer's recipe should honor this; if not, the recipe's hardcoded path wins. | recipe-dependent (e.g. `~/builds`)        |
-| Build secrets     | Whatever the consumer's `just mobile-build-apk` requires (e.g. `CLERK_PUBLISHABLE_KEY`, API URL overrides).     | consumer-specific — see consumer CLAUDE.md |
+| Variable         | Purpose                                                                                                         | Default                                    |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `PHONE_IP`       | LAN IP of the device. Set once per developer machine (e.g. in `~/.bashrc`).                                     | _required_ — fail fast if unset            |
+| `ANDROID_HOME`   | Path to Android SDK. The consumer's `just mobile-build-apk` recipe normally exports this; respect it if set.    | recipe-dependent                           |
+| `APK_OUTPUT_DIR` | Where to drop the built APK. The consumer's recipe should honor this; if not, the recipe's hardcoded path wins. | recipe-dependent (e.g. `~/builds`)         |
+| Build secrets    | Whatever the consumer's `just mobile-build-apk` requires (e.g. `CLERK_PUBLISHABLE_KEY`, API URL overrides).     | consumer-specific — see consumer CLAUDE.md |
 
 If `PHONE_IP` is unset, ask the developer for it and suggest adding `export PHONE_IP=…` to their shell rc so they don't have to repeat themselves.
 

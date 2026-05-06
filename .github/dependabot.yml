@@ -21,8 +21,8 @@ updates:
       github-actions:
         applies-to: version-updates
         patterns:
-          - "*"
+          - '*'
     commit-message:
-      prefix: "chore(deps)"
+      prefix: 'chore(deps)'
     labels:
       - dependencies

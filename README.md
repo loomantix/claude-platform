@@ -10,18 +10,18 @@ A reusable set of [Claude Code](https://claude.com/claude-code) skills, agents, 
 
 Operational skills you can install globally or sync into any repo:
 
-| Skill | What it does |
-|---|---|
-| `/refactorpass` | Pre-push wrapper around `/simplify` — single-pass refactor, commits the result, skips on docs-only changesets. |
-| `/grill` | Pre-push adversarial review. Lean default runs `code-reviewer` + `silent-failure-hunter`; `deep` arg runs the full agent matrix. |
-| `/deepgrill` | Orchestrator for the deep pre-push chain (`/refactorpass` + `/grill deep`). |
-| `/reviewit <pr>` | Post-push AI review orchestrator. Lean default fires Gemini Flash + Copilot, caps at 2 iterations. `deep` arg adds `/review` and restores 4-iter cap. Dedups, addresses each finding, replies in the PR thread. |
-| `/copilot-review <pr>` | Address GitHub Copilot review comments on a PR systematically. |
-| `/feature-dev` | Guided feature development — discovery → architecture → implementation → quality review. |
-| `/issues` | Thin workflow over `gh issue` with a dependency-aware ready queue. Parses `Blocked by #N` / `Depends on #N` from issue bodies. |
-| `/agent-loop` | Autonomous Claude relay over the `/issues` ready queue. Claims an issue, spawns a fresh Claude session, pushes results to a collection branch, repeats. |
-| `/task-packet` | Execute a markdown Task Packet end-to-end (code, tests, GitHub issue, PR, closure). |
-| `/phone-install` | Build a release APK from the consumer repo and install it on a tethered Android device over wireless ADB. |
+| Skill                  | What it does                                                                                                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/refactorpass`        | Pre-push wrapper around `/simplify` — single-pass refactor, commits the result, skips on docs-only changesets.                                                                                                  |
+| `/grill`               | Pre-push adversarial review. Lean default runs `code-reviewer` + `silent-failure-hunter`; `deep` arg runs the full agent matrix.                                                                                |
+| `/deepgrill`           | Orchestrator for the deep pre-push chain (`/refactorpass` + `/grill deep`).                                                                                                                                     |
+| `/reviewit <pr>`       | Post-push AI review orchestrator. Lean default fires Gemini Flash + Copilot, caps at 2 iterations. `deep` arg adds `/review` and restores 4-iter cap. Dedups, addresses each finding, replies in the PR thread. |
+| `/copilot-review <pr>` | Address GitHub Copilot review comments on a PR systematically.                                                                                                                                                  |
+| `/feature-dev`         | Guided feature development — discovery → architecture → implementation → quality review.                                                                                                                        |
+| `/issues`              | Thin workflow over `gh issue` with a dependency-aware ready queue. Parses `Blocked by #N` / `Depends on #N` from issue bodies.                                                                                  |
+| `/agent-loop`          | Autonomous Claude relay over the `/issues` ready queue. Claims an issue, spawns a fresh Claude session, pushes results to a collection branch, repeats.                                                         |
+| `/task-packet`         | Execute a markdown Task Packet end-to-end (code, tests, GitHub issue, PR, closure).                                                                                                                             |
+| `/phone-install`       | Build a release APK from the consumer repo and install it on a tethered Android device over wireless ADB.                                                                                                       |
 
 ### Custom sub-agents (`.claude/agents/`)
 

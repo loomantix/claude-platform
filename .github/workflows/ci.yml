@@ -45,7 +45,7 @@ jobs:
             bash -n "$f"
           done
       - name: shellcheck (warnings allowed; errors fail)
-        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38  # v2.0.0
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # v2.0.0
         with:
           severity: error
 
@@ -67,6 +67,17 @@ jobs:
             # are still valid YAML — parse-only check is sufficient.
             python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" "$f"
           done
+
+  format:
+    name: Prettier check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Prettier --check
+        run: npx --yes prettier@3.8.3 --check .
 
   sync-targets:
     name: sync-targets.yml matches schema

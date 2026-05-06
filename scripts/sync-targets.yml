@@ -27,12 +27,12 @@ targets:
   - source: .claude/skills/issues/scripts/ready.py
     destination: .claude/skills/issues/scripts/ready.py
     substitutions: []
-    mode: "0755"
+    mode: '0755'
 
   - source: .claude/skills/issues/scripts/link.py
     destination: .claude/skills/issues/scripts/link.py
     substitutions: []
-    mode: "0755"
+    mode: '0755'
 
   - source: .claude/skills/refactorpass/SKILL.md
     destination: .claude/skills/refactorpass/SKILL.md
@@ -65,7 +65,7 @@ targets:
   - source: .claude/skills/agent-loop/scripts/agent-loop.sh
     destination: .claude/skills/agent-loop/scripts/agent-loop.sh
     substitutions: []
-    mode: "0755"
+    mode: '0755'
 
   # Custom Claude Code agents that the synced skills depend on. /feature-dev
   # invokes code-explorer, code-architect, and code-reviewer. Without these

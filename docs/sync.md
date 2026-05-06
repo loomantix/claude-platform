@@ -114,6 +114,17 @@ Substitution is plain `<<KEY>>` find-and-replace — no template engine. Multi-l
 
 > **Important — use `--body "$VALUE"`, not `--body -`.** Passing a secret via stdin (`echo "$TOKEN" | gh secret set --body -`) silently mangles the value: the secret ends up non-empty (so the workflow's `[ -z "$UPSTREAM_READ_TOKEN" ]` validation passes) but the bytes don't authenticate. Failure mode looks identical to a legitimate auth error (`could not read Username for github.com`). The arg form (`--body "$TOKEN"`) is the only reliable transport.
 
+## Prettier and synced files
+
+Synced files are formatted upstream with the canonical [`.prettierrc`](../.prettierrc) at this repo's root. If a consumer runs Prettier with a different config, its `prettier --write` will reformat synced files and the next sync will revert that formatting — producing recurring local working-tree drift.
+
+Two ways to avoid the drift:
+
+1. **Adopt the canonical config** — copy this repo's `.prettierrc` into your consumer repo (or extend yours from it). Prettier then produces identical output on both sides and there's no drift.
+2. **Exclude synced paths from your prettier run** — paste the marker block from [`recommended-prettierignore.txt`](../recommended-prettierignore.txt) into your consumer's `.prettierignore`. Keep the `>>> platform-synced paths <<<` markers intact so the block can be replaced mechanically when the synced surface changes.
+
+Regenerate `recommended-prettierignore.txt` whenever `scripts/sync-targets.yml` changes — the snippet mirrors its `destination:` paths.
+
 ## Adding a new file to the sync surface
 
 1. Add an entry to `scripts/sync-targets.yml` with `source`, `destination`, and `substitutions: []` (or the placeholder list).

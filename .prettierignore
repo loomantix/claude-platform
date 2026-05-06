@@ -1,0 +1,17 @@
+# Build artifacts and dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+
+# Lockfiles managed by their tools
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Legal text — preserve canonical wrapping
+LICENSE
+NOTICE
+
+# Local-only Claude overrides (already gitignored, defense in depth)
+.claude/settings.local.json

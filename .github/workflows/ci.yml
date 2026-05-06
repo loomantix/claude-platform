@@ -68,6 +68,17 @@ jobs:
             python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" "$f"
           done
 
+  format:
+    name: Prettier check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Prettier --check
+        run: npx --yes prettier@3.8.3 --check .
+
   sync-targets:
     name: sync-targets.yml matches schema
     runs-on: ubuntu-latest

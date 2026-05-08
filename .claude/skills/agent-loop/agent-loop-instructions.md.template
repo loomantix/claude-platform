@@ -1,0 +1,90 @@
+# Agent-loop instructions
+
+You're working autonomously on a single GitHub issue in this repository. Read this file fully, then read `gh issue view <N>` for your assigned issue. Work the issue, open a PR, and exit.
+
+> **Customize this file before running `/agent-loop`.** It was created from a starter template on first sync from upstream. Sections marked `TODO:` need values for your repo. The file lives at the repo root and is _not_ overwritten by subsequent syncs (its sync target uses `create_if_missing: true`).
+
+## Repo overview
+
+TODO: 2–3 sentences describing this repo. Tech stack, what it produces, who consumes it.
+
+## Build / test
+
+TODO: list the commands an agent should run to verify a change locally before pushing. Example shape:
+
+```bash
+# install deps
+<install command>
+
+# build
+<build command>
+
+# unit + integration tests
+<test command>
+
+# format / lint
+<format check command>
+```
+
+## Commit + PR rules
+
+TODO: customize for this repo's conventions. Common conventions to keep or remove:
+
+- **Conventional commits** if used: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`. PR titles match.
+- **DCO sign-off** if enforced: every commit needs `git commit -s`. CI rejects PRs without the trailer.
+- **Signed commits** if required on the base branch — don't bypass with `--no-gpg-sign` or `-c commit.gpgsign=false`.
+- **Annotated tags** if used: `git tag -a -m "..."`.
+- **PR base branch**: TODO (often `main`; some repos use `staging` or another).
+- **Heredocs in `gh` commands cause permission prompts** — write multiline bodies to a temp file first, then `gh pr create --body-file <path>`.
+
+## What NOT to edit
+
+If this repo consumes synced files from an upstream (check for `.github/workflows/sync-from-upstream.yml`), those files are overwritten on every sync — local edits are lost. The list below is a starting set; the canonical list lives in the upstream's sync manifest, not in your consumer repo. Adjust the entries below to match what your sync workflow actually pulls.
+
+Common synced surfaces:
+
+- `.claude/skills/**`
+- `.claude/agents/**`
+- `.claude/REVIEW_WORKFLOW.md`
+- `.claude/settings.json`
+- `.github/copilot-instructions.md`
+
+If your issue requires changing any of these, **stop and post a comment on the issue** explaining the change belongs upstream. Don't edit the consumer copy — it'll be reverted on the next sync.
+
+## Filesystem hygiene
+
+- Use repo-scoped `/tmp` paths: `/tmp/<repo-name>/...` rather than bare `/tmp/foo` to avoid collisions across parallel sessions on the same machine.
+
+## Out-of-scope guardrails
+
+If you discover any of these mid-issue, **stop, comment on the issue with what you found, and exit without a PR**:
+
+- The issue requires touching another repository (cross-repo coordination).
+- The issue has open policy questions — re-read the body; if it asks "should we A or B?" or "decision needed," that's a human call.
+- The issue requires deleting org-level secrets, modifying branch protection, or installing GitHub Apps — these have organization-wide blast radius and need human verification.
+- Acceptance criteria can't be satisfied without changing the synced surfaces listed above.
+
+## Pre-push review (if these skills are available)
+
+Before pushing your PR, run the lean review chain (skip on docs/config-only changes):
+
+1. `/refactorpass` — single `/simplify` pass.
+2. `/grill` — runs `code-reviewer` and `silent-failure-hunter` agents on the diff.
+
+## PR shape
+
+```markdown
+## Summary
+
+<1–3 bullets, what changed and why>
+
+## Test plan
+
+- [ ] <build command>
+- [ ] <test command>
+- [ ] <issue-specific verification>
+
+Closes #<N>
+```
+
+After opening the PR, run `/reviewit <pr-number>` to fire AI reviews and address findings. The lean default caps at 2 iterations.

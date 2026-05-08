@@ -51,6 +51,11 @@ class Target(TypedDict, total=False):
     target (requires `destination` + `delete: True`). `substitutions` and
     `mode` apply to copy targets only.
 
+    `create_if_missing: True` on a copy target makes the engine bootstrap
+    the destination on first sync and then leave it alone — preserving any
+    consumer customization on subsequent syncs. Mutually exclusive with
+    `delete`.
+
     The schema is documented here for readers; the engine still validates
     each field at runtime since YAML provides no type guarantees.
     """
@@ -60,6 +65,7 @@ class Target(TypedDict, total=False):
     substitutions: list[str]
     mode: str | int
     delete: bool
+    create_if_missing: bool
 
 
 class ConsumerConfig(TypedDict, total=False):
@@ -272,6 +278,23 @@ def main() -> int:
             return 1
         delete_flag = bool(delete_raw)
 
+        # Same boolean-strictness for `create_if_missing` — a stringly-typed
+        # value would silently disable the bootstrap-only semantics and
+        # clobber consumer customization on every sync.
+        cim_raw = target.get("create_if_missing")
+        if cim_raw is not None and not isinstance(cim_raw, bool):
+            sys.stderr.write(
+                f"  ❌ `create_if_missing` must be a boolean (true/false), got {cim_raw!r}: {target!r}\n"
+            )
+            return 1
+        create_if_missing_flag = bool(cim_raw)
+
+        if delete_flag and create_if_missing_flag:
+            sys.stderr.write(
+                f"  ❌ `delete` and `create_if_missing` are mutually exclusive: {target!r}\n"
+            )
+            return 1
+
         # Type/shape validation. The manifest is upstream-authored, so
         # non-string paths or bare `.`/`..` here are bugs that warrant a
         # clean error rather than a downstream TypeError or write-the-cwd
@@ -357,6 +380,31 @@ def main() -> int:
             print(f"  🗑️  removed {dest_rel}")
             removed += 1
             continue
+
+        # `create_if_missing: True` bootstraps the destination on first
+        # sync and leaves it alone thereafter, so consumer customization
+        # of the file survives subsequent syncs. Short-circuit before
+        # source read + substitution — when the file already exists,
+        # missing substitution values in the consumer's config must NOT
+        # fail the sync (the file's content is no longer the upstream's
+        # concern). `exists() or is_symlink()` mirrors the delete branch's
+        # treatment of dangling symlinks as "present."
+        #
+        # Refuse a directory at the destination — the manifest entry
+        # describes a file, and silently treating a directory as
+        # "preserved" would mask consumer-side bad state and leave the
+        # bootstrap target permanently uncreated. Mirrors the delete
+        # branch's directory-refusal pattern.
+        if create_if_missing_flag:
+            if dest_path.is_dir() and not dest_path.is_symlink():
+                sys.stderr.write(
+                    f"  ❌ destination is a directory, refusing to bootstrap a file there: {dest_rel}\n"
+                )
+                return 1
+            if dest_path.exists() or dest_path.is_symlink():
+                print(f"  ✓  preserved {dest_rel} (create_if_missing)")
+                unchanged += 1
+                continue
 
         # Same path-bound check on `source` as `destination` — a manifest
         # typo with `..` segments would otherwise read arbitrary files

@@ -8,6 +8,8 @@ The single-source-of-truth list is [`scripts/sync-targets.yml`](../scripts/sync-
 
 A target with `delete: true` removes the destination from the consumer instead of writing to it (and prunes any empty parent directories). Use this to retire a previously-synced file across all consumers.
 
+A target with `create_if_missing: true` bootstraps the destination on first sync and leaves it alone thereafter. Use this for files that consumers are expected to customize after creation (starter scaffolding, per-consumer configuration). On first creation, required substitutions are still validated and the sync hard-fails if any are missing — same contract as any other copy target. On subsequent syncs the engine short-circuits before substitution, so substitution values declared by the manifest don't have to remain present in the consumer's `.platform-config.yml` once the file exists. Mutually exclusive with `delete`.
+
 ## CI flow (consumer-side workflow)
 
 Each consumer repo drops in `.github/workflows/sync-from-upstream.yml` (copied from [`sync-from-upstream.yml.template`](../.github/workflows/sync-from-upstream.yml.template), with the `UPSTREAM_REPO` and secret names filled in). On its daily cron + `workflow_dispatch`, the workflow:
@@ -100,6 +102,7 @@ Substitution is plain `<<KEY>>` find-and-replace — no template engine. Multi-l
 - **Hard fail on missing required substitution.** If a target declares a placeholder the consumer hasn't configured, the script exits 1 — better to break the sync PR than to silently leave an unfilled `<<KEY>>` in the destination file.
 - **Soft warn on undeclared placeholders in the source.** If the source contains `<<FOO>>` but `sync-targets.yml` doesn't declare `FOO` for that target, the placeholder is left intact and a warning is printed. Catches the case where a template change forgot to update the manifest.
 - **File mode preserved.** Targets with `mode: "0755"` get chmod'd after write.
+- **`create_if_missing` short-circuits before substitution.** When the destination already exists, the engine skips the source read, substitution, and write entirely. This means a consumer can leave `create_if_missing` substitution values undeclared after first creation without breaking later syncs.
 
 ## Adding a new consumer
 

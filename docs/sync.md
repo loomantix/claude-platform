@@ -21,17 +21,25 @@ Each consumer repo drops in `.github/workflows/sync-from-upstream.yml` (copied f
 
 A reviewer merges the PR; once merged, the next `git pull` on a developer's machine surfaces the changes.
 
-### Tag bumping (the gate that ships)
+### Tag advancement (the gate that ships)
 
-Consumers track a tag (`sync-v1`), not `main`. So an unintended push to upstream main does NOT propagate. Shipping a new sync surface is two deliberate steps:
+Consumers track a tag (`sync-v1`), not `main`. So an unintended push to upstream main does NOT propagate. Shipping a new sync surface is one deliberate step: force-retag `sync-v1` to point at the commit you want consumers to receive.
 
 ```bash
-# in the upstream repo, on main, after merging changes you want consumers to receive
-git tag sync-v2 -a -m "..."
-git push origin sync-v2
+# in the upstream repo, on main, after merging changes you want to ship
+git tag -af sync-v1 -m "Retag sync-v1 to <reason>" <commit-sha>
+git push --force-with-lease origin sync-v1
 ```
 
-Then bump `UPSTREAM_REF: sync-v2` in each consumer's workflow file (one PR per consumer), or re-tag `sync-v1` to advance the existing pinned ref by re-pointing the tag — the latter is more dangerous and requires `git push --force-with-lease origin sync-v1`.
+The `--force-with-lease` is required and intentional — it asserts the tag's previous SHA so a concurrent retag from another maintainer fails loudly rather than silently clobbering. The annotated message documents the cumulative changes since the previous retag.
+
+#### Why the `-v1` suffix is a protocol version, not a content version
+
+The tag is named `sync-v1` because it pins the **sync protocol** — the manifest schema, the substitution syntax, the on-disk contract between this engine and consumer trees. Bumping to `sync-v2` is reserved for a breaking change in that protocol (e.g., a new required manifest field that older engines can't handle, or a substitution syntax change that older engine code parses incorrectly). When that happens, the bump is a coordinated migration: consumers stay on `sync-v1` until they've also updated their pinned engine tarball / workflow to understand `v2`, then bump `UPSTREAM_REF: sync-v2` in their `.github/workflows/sync-from-upstream.yml`.
+
+For ordinary content advances — adding a new file to the sync surface, retiring a stub, fixing typos in a synced doc — **force-retag the existing `sync-v1`**. Don't create `sync-v2` for content; that's what advancing the tag pointer is for. A short-lived `sync-v2` tag that no consumer migrates to becomes orphaned residue.
+
+In practice: `sync-v1` has been the active tag since the protocol was introduced. There is no plan to bump to `sync-v2` until the engine itself ships a breaking change.
 
 ### Kill switch
 

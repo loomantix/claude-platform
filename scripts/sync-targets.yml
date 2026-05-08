@@ -67,6 +67,15 @@ targets:
     substitutions: []
     mode: '0755'
 
+  # /agent-loop expects `agent-loop-instructions.md` at the consumer's repo
+  # root. `create_if_missing: true` bootstraps the file from this template
+  # on first sync, then leaves it alone — consumer customizations made
+  # after the initial sync survive every subsequent run.
+  - source: .claude/skills/agent-loop/agent-loop-instructions.md.template
+    destination: agent-loop-instructions.md
+    substitutions: []
+    create_if_missing: true
+
   # Custom Claude Code agents that the synced skills depend on. /feature-dev
   # invokes code-explorer, code-architect, and code-reviewer. Without these
   # in each consumer's .claude/agents/, those skills fail with "agent not found".

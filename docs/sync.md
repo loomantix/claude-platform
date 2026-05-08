@@ -8,7 +8,7 @@ The single-source-of-truth list is [`scripts/sync-targets.yml`](../scripts/sync-
 
 A target with `delete: true` removes the destination from the consumer instead of writing to it (and prunes any empty parent directories). Use this to retire a previously-synced file across all consumers.
 
-A target with `create_if_missing: true` bootstraps the destination on first sync and leaves it alone thereafter. Use this for files that consumers are expected to customize after creation (starter scaffolding, per-consumer configuration). The engine never re-substitutes or re-writes the file once it exists, so substitution values that were missing at first-creation time can be filled in later without breaking the sync. Mutually exclusive with `delete`.
+A target with `create_if_missing: true` bootstraps the destination on first sync and leaves it alone thereafter. Use this for files that consumers are expected to customize after creation (starter scaffolding, per-consumer configuration). On first creation, required substitutions are still validated and the sync hard-fails if any are missing — same contract as any other copy target. On subsequent syncs the engine short-circuits before substitution, so substitution values declared by the manifest don't have to remain present in the consumer's `.platform-config.yml` once the file exists. Mutually exclusive with `delete`.
 
 ## CI flow (consumer-side workflow)
 

@@ -27,7 +27,7 @@ Defaults: 10 iterations, auto-generated collection branch (`agent-loop-<timestam
 
 1. **`agent-loop-instructions.md` at the repo root** — repo-specific agent instructions (codebase conventions, build commands, test invocation, deployment quirks). The Claude prompt is fixed: `Read @agent-loop-instructions.md and follow the instructions. Your assigned issue is #N. Run 'gh issue view N' to see the full description, then complete it.` If the file is missing, the script exits before claiming work.
 
-   The sync engine bootstraps this file from [`agent-loop-instructions.md.template`](agent-loop-instructions.md.template) on first sync (manifest entry uses `create_if_missing: true`). After first creation, customize the file for your repo — subsequent syncs leave it alone.
+   The sync engine bootstraps this file from an upstream-only template (`agent-loop-instructions.md.template`) on first sync — the manifest entry uses `create_if_missing: true`. After first creation, customize the file for your repo; subsequent syncs leave it alone.
 
 2. **`dev: human-only` label** in the consumer's GitHub repo — used to keep manual-testing or human-review-required issues out of the autonomous queue. The script's `pick_next_issue` filter excludes issues carrying this label. Create once per repo:
 

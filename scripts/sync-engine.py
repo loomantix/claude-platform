@@ -389,10 +389,22 @@ def main() -> int:
         # fail the sync (the file's content is no longer the upstream's
         # concern). `exists() or is_symlink()` mirrors the delete branch's
         # treatment of dangling symlinks as "present."
-        if create_if_missing_flag and (dest_path.exists() or dest_path.is_symlink()):
-            print(f"  ✓  preserved {dest_rel} (create_if_missing)")
-            unchanged += 1
-            continue
+        #
+        # Refuse a directory at the destination — the manifest entry
+        # describes a file, and silently treating a directory as
+        # "preserved" would mask consumer-side bad state and leave the
+        # bootstrap target permanently uncreated. Mirrors the delete
+        # branch's directory-refusal pattern.
+        if create_if_missing_flag:
+            if dest_path.is_dir() and not dest_path.is_symlink():
+                sys.stderr.write(
+                    f"  ❌ destination is a directory, refusing to bootstrap a file there: {dest_rel}\n"
+                )
+                return 1
+            if dest_path.exists() or dest_path.is_symlink():
+                print(f"  ✓  preserved {dest_rel} (create_if_missing)")
+                unchanged += 1
+                continue
 
         # Same path-bound check on `source` as `destination` — a manifest
         # typo with `..` segments would otherwise read arbitrary files

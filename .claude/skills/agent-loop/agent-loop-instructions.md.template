@@ -39,7 +39,7 @@ TODO: customize for this repo's conventions. Common conventions to keep or remov
 
 ## What NOT to edit
 
-If this repo consumes synced files from an upstream, those files are overwritten on every sync — local edits are lost. Confirm the list against this repo's `scripts/sync-targets.yml` (or its consumer-side equivalent), then update the list below.
+If this repo consumes synced files from an upstream (check for `.github/workflows/sync-from-upstream.yml`), those files are overwritten on every sync — local edits are lost. The list below is a starting set; the canonical list lives in the upstream's sync manifest, not in your consumer repo. Adjust the entries below to match what your sync workflow actually pulls.
 
 Common synced surfaces:
 

@@ -126,3 +126,12 @@ targets:
       - DOMAIN_RULES
       - REVIEW_FOCUS
       - WHAT_NOT_TO_SUGGEST_EXTRA
+
+  # DCO sign-off check — only relevant for OSS consumers (Apache 2 + DCO is
+  # the standard contract). The canonical version uses `git rev-list
+  # --no-merges` so "Update branch" merge commits, which lack a
+  # Signed-off-by trailer, don't fail the check. Private consumers that
+  # don't need DCO opt out via `skip_targets` in their `.platform-config.yml`.
+  - source: .github/workflows/dco.yml
+    destination: .github/workflows/dco.yml
+    substitutions: []

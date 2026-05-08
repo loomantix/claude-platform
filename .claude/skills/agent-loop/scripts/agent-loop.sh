@@ -16,9 +16,9 @@
 #   1. Fast-forward sync with the collection branch (handles concurrent
 #      merges and force-pushes). Genuine merge conflicts fail loud — the
 #      eventual push surfaces persistent conflicts via PUSH_FAILURES.
-#   2. Pick a work item — first non-`dev: human-only` issue from the ready
+#   2. Pick a work item — first `dev: agent`-labeled issue from the ready
 #      queue, or (with --resume) an existing in-progress issue assigned to the
-#      operator.
+#      operator (also gated to `dev: agent`).
 #   3. Claim by adding @me as assignee. If a race happens (>1 assignee after),
 #      release and try the next.
 #   4. Spawn a fresh Claude session with bypassPermissions, tasked with
@@ -267,8 +267,11 @@ push_to_collection() {
 }
 
 # Pick the next work item. Default: first dependency-free issue from the ready
-# queue that isn't labeled `dev: human-only`. With --resume: if any open issue
-# is already assigned to you, prefer it (orphaned in-progress recovery).
+# queue that carries the `dev: agent` label. With --resume: if any open
+# `dev: agent` issue is already assigned to you, prefer it (orphaned
+# in-progress recovery). The positive label gate is required — without it the
+# operator must manually triage every backlog item to keep the loop from
+# wandering into design / cross-repo / device-gated work.
 pick_next_issue() {
     # Output format: <source>\t<number>\t<title>. The source field comes
     # first so the title (which may legally contain tab characters) sits
@@ -283,9 +286,9 @@ pick_next_issue() {
         # empty array so the script emits no output instead of a literal
         # "null" string concatenated with .title (which would then look
         # like a valid issue id to the caller).
-        resumed=$(gh issue list --assignee @me --state open --limit 100 \
-                    --json number,title,labels \
-                    --jq '[.[] | select(([.labels[]?.name] | index("dev: human-only") | not))] | .[0] // empty | (.number|tostring) + "\t" + .title' \
+        resumed=$(gh issue list --assignee @me --state open --label "dev: agent" --limit 100 \
+                    --json number,title \
+                    --jq '.[0] // empty | (.number|tostring) + "\t" + .title' \
                     2>"$resume_err")
         local resume_status=$?
         if [ $resume_status -ne 0 ]; then
@@ -307,11 +310,12 @@ pick_next_issue() {
     # ready.py --json prints `[{number, title, labels: [{name, ...}, ...], ...}, ...]`.
     # Capture stderr + exit so a `ready.py` failure (gh auth, rate limit)
     # surfaces as a hard error instead of being misread as "no issues".
-    # `--unassigned` filters at the source; `--limit 100` raises the
+    # `--unassigned` + `--agent` filters at the source so the queue only
+    # contains positively-tagged candidates; `--limit 100` raises the
     # default 20 so longer queues don't false-report "no issues".
     local ready_err ready_json ready_status
     ready_err=$(mktemp /tmp/agent-loop-ready-err.XXXXXX)
-    ready_json=$("$ISSUES_READY" --unassigned --limit 100 --json 2>"$ready_err") || ready_status=$?
+    ready_json=$("$ISSUES_READY" --unassigned --agent --limit 100 --json 2>"$ready_err") || ready_status=$?
     ready_status=${ready_status:-0}
     if [ "$ready_status" -ne 0 ]; then
         echo -e "${RED}✗${NC} Ready probe failed (ready.py exit $ready_status) — first stderr line:" >&2
@@ -322,9 +326,11 @@ pick_next_issue() {
     rm -f "$ready_err"
 
     # `.[0] // empty` ensures an empty queue produces no output instead of
-    # a literal "null" that the caller might mistake for an issue id.
+    # a literal "null" that the caller might mistake for an issue id. The
+    # `dev: agent` filter is applied upstream by `ready.py --agent`, so the
+    # input here is already pre-filtered to agent-eligible candidates.
     local next
-    next=$(echo "$ready_json" | jq -r '[.[] | select(([.labels[]?.name] | index("dev: human-only") | not))] | .[0] // empty | (.number|tostring) + "\t" + .title' 2>/dev/null)
+    next=$(echo "$ready_json" | jq -r '.[0] // empty | (.number|tostring) + "\t" + .title' 2>/dev/null)
     if [ -z "$next" ]; then
         return 1
     fi

@@ -1,0 +1,70 @@
+# Notify the off-repo private-reference leak scanner that this PR needs scanning.
+#
+# Why this exists:
+#   The scanner runs in loomantix/platform (private). It posts a check-run
+#   named `private-reference-policy` back here. Without this workflow, that
+#   check only updates when the scanner's cron fires — GitHub Actions cron
+#   is non-deterministic on low-activity repos, with observed effective
+#   intervals of 30-47 min against a `*/5` config. See loomantix/platform#123.
+#
+# Threat model:
+#   The denylist contents stay in the private repo. The scanner posts only
+#   a generic pass/fail summary back to PRs here. The repo path
+#   `loomantix/platform` itself is considered acceptably generic.
+#
+#   The App token has `actions: write` on loomantix/platform only, scoped
+#   via the App's installation. That's strictly less than the
+#   `contents: write` `repository_dispatch` would require — a leaked key
+#   could trigger or read workflow runs on the private repo, but not
+#   modify code or read non-Actions secrets. Rotate on schedule.
+#
+# Gating:
+#   The job is gated on `vars.LEAK_DISPATCH_ENABLED == '1'` so it stays
+#   dormant until the App + secrets land. The private-side cron remains as
+#   a safety-net (will be relaxed in a follow-up PR after dispatch is
+#   verified working).
+
+name: Notify leak scanner
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: PR number to dispatch a scan for
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: notify-leak-scanner-pr-${{ github.event.pull_request.number || github.event.inputs.pr-number }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    if: vars.LEAK_DISPATCH_ENABLED == '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.LEAK_SCAN_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.LEAK_SCAN_DISPATCH_APP_KEY }}
+          owner: loomantix
+          repositories: platform
+
+      - name: Dispatch scan on private repo
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          echo "Dispatching scan for PR #${PR_NUMBER}"
+          gh api -X POST \
+            "repos/loomantix/platform/actions/workflows/claude-platform-leak-scan.yml/dispatches" \
+            -f ref=main \
+            -f "inputs[pr-number]=${PR_NUMBER}"
+          echo "Dispatched. Expect 'private-reference-policy' check-run within ~30s."

@@ -1,28 +1,7 @@
-# Notify the off-repo private-reference leak scanner that this PR needs scanning.
+# Notifies an off-repo scanner that this PR needs a private-reference scan.
+# The scanner posts a `private-reference-policy` check-run back here.
 #
-# Why this exists:
-#   The scanner runs in loomantix/platform (private). It posts a check-run
-#   named `private-reference-policy` back here. Without this workflow, that
-#   check only updates when the scanner's cron fires — GitHub Actions cron
-#   is non-deterministic on low-activity repos, with observed effective
-#   intervals of 30-47 min against a `*/5` config. See loomantix/platform#123.
-#
-# Threat model:
-#   The denylist contents stay in the private repo. The scanner posts only
-#   a generic pass/fail summary back to PRs here. The repo path
-#   `loomantix/platform` itself is considered acceptably generic.
-#
-#   The App token has `actions: write` on loomantix/platform only, scoped
-#   via the App's installation. That's strictly less than the
-#   `contents: write` `repository_dispatch` would require — a leaked key
-#   could trigger or read workflow runs on the private repo, but not
-#   modify code or read non-Actions secrets. Rotate on schedule.
-#
-# Gating:
-#   The job is gated on `vars.LEAK_DISPATCH_ENABLED == '1'` so it stays
-#   dormant until the App + secrets land. The private-side cron remains as
-#   a safety-net (will be relaxed in a follow-up PR after dispatch is
-#   verified working).
+# Kill switch: clear `vars.LEAK_DISPATCH_ENABLED` to stop dispatching.
 
 name: Notify leak scanner
 

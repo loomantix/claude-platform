@@ -1,6 +1,6 @@
-# claude-platform — Claude project guide
+# claude-platform — Codex Project Guide
 
-Upstream source-of-truth for Loomantix's Claude Code skills, agents, and sync engine. Apache 2.0 + DCO. See [README.md](README.md) for what ships here and [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.
+Upstream source of truth for Loomantix's Claude Code skills, agents, and sync engine. Apache 2.0 + DCO. See [README.md](README.md) for what ships here and [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.
 
 ## Public-Repo Policy
 
@@ -13,7 +13,16 @@ This repo is public. Keep repository content suitable for public readers:
 
 If work needs non-public context, discuss that context outside this public repository and keep any public issue or PR focused on the reusable change.
 
-## Cross-references
+## Working Rules
+
+- Start each session by reading this file and checking `git status --short --branch`.
+- Use `rg` / `rg --files` for search and file discovery.
+- Use `apply_patch` for manual file edits where practical.
+- Do not revert user changes or unrelated dirty worktree state.
+- Keep changes scoped to the user's request and the existing repo architecture.
+- Run the smallest meaningful validation command after edits; report anything that could not be run.
+
+## Cross-References
 
 - [README.md](README.md) — what ships here, how to install skills, how to wire up a consumer.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — workflow, scope, branch / commit / DCO conventions.

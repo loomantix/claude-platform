@@ -3,5 +3,5 @@ Copyright 2026 Loomantix Inc.
 
 This product includes software developed at Loomantix Inc. (https://loomantix.com).
 
-The Claude Code skills, agents, and sync engine in this repo were originally
-extracted from Loomantix's internal platform repo and generalized for OSS use.
+The Claude Code skills, agents, and sync engine in this repo are maintained
+by Loomantix for public reuse under the Apache 2.0 license.

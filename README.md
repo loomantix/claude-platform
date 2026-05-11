@@ -1,14 +1,27 @@
 # claude-platform
 
-A reusable set of [Claude Code](https://claude.com/claude-code) skills, agents, and a sync engine that propagates them to consumer repos. Apache 2.0 + DCO.
+A reusable [Claude Code](https://claude.com/claude-code) toolkit for teams that want the same agent workflows in more than one repository. It ships operational skills, supporting sub-agents, and a small sync engine that opens propagation PRs against downstream repos.
 
-> **Status:** v0.1 — initial extraction from Loomantix's internal platform repo. Production-tested across a four-repo fleet for ~6 months before extraction.
+Apache 2.0 + DCO.
+
+> **Status:** v0.1 — public bootstrap release. APIs and workflows may evolve as the sync surface stabilizes.
+
+## Why this exists
+
+Claude Code project setup tends to drift as soon as a team has several repos: one repo gets a better review prompt, another gets a safer issue workflow, and a third still has last month's instructions. This repo keeps that surface reviewable in one place while still letting each downstream repo own its local project context.
+
+Use this project if you want:
+
+- A repeatable pre-push and post-push AI review chain.
+- Repository-local skills that every teammate can invoke the same way.
+- A pull-request-based sync flow instead of direct writes to downstream default branches.
+- Public, auditable defaults for DCO, Copilot instructions, and Claude Code guidance.
 
 ## What's in here
 
 ### Claude Code skills (`.claude/skills/`)
 
-Operational skills you can install globally or sync into any repo:
+Operational skills you can install locally or sync into a repo:
 
 | Skill                  | What it does                                                                                                                                                                                                    |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -33,20 +46,24 @@ Three agent definitions invoked by the skills above:
 
 ### Sync engine (`scripts/`)
 
-A two-script mechanism that lets one upstream repo propagate canonical files (skills, workflows, docs) to many consumers via a daily-cron PR:
+A two-script mechanism that lets one upstream repo propagate canonical files (skills, workflows, docs) to many downstream repos via a scheduled PR:
 
 - `sync-engine.py` — reads `sync-targets.yml` from the upstream and a `.platform-config.yml` from the consumer, applies `<<KEY>>` substitutions, writes / deletes destination files. Idempotent; hard-fails on missing required substitutions; soft-warns on undeclared placeholders.
-- `create-signed-commit.py` — creates the sync commit via the GitHub Contents API rather than `git commit + git push`. Commits made via the API are auto-signed by GitHub (`committer: GitHub`, `verified: true`) when invoked with a GitHub App installation token, satisfying SOC 2 / ISO 27001 controls that require attested-actor sign-off.
+- `create-signed-commit.py` — creates the sync commit via the GitHub Contents API rather than `git commit + git push`. Commits made via the API are auto-signed by GitHub (`committer: GitHub`, `verified: true`) when invoked with a GitHub App installation token.
 
-The reference consumer-side workflow lives at [`.github/workflows/sync-from-upstream.yml.template`](.github/workflows/sync-from-upstream.yml.template). Drop it into a consumer, fill in `UPSTREAM_REPO`, set the App-token secrets, and the consumer pulls daily on a `sync-v1` tag.
+The reference downstream workflow lives at [`.github/workflows/sync-from-upstream.yml.template`](.github/workflows/sync-from-upstream.yml.template). Drop it into a downstream repo, fill in `UPSTREAM_REPO`, set the App-token secrets, and the repo pulls daily from a `sync-v1` tag.
 
 ### Other
 
-- `.claude/REVIEW_WORKFLOW.md` — canonical doc describing the lean / deep AI review chains. Sync this into every consumer's `.claude/` so Claude sessions follow the same flow.
-- `.github/copilot-instructions.md.template` — substitution-driven Copilot reviewer prompt. Each consumer fills in `PROJECT_NAME`, `STACK_TABLE`, `CODE_RULES`, etc. via `.platform-config.yml`.
+- `.claude/REVIEW_WORKFLOW.md` — canonical doc describing the lean / deep AI review chains. Sync this into each downstream repo's `.claude/` so Claude sessions follow the same flow.
+- `.github/copilot-instructions.md.template` — substitution-driven Copilot reviewer prompt. Each downstream repo fills in `PROJECT_NAME`, `STACK_TABLE`, `CODE_RULES`, etc. via `.platform-config.yml`.
 - `claude/github-api-usage.md` — drop-in guidance for any repo's `CLAUDE.md` on rate-limit-aware GitHub API usage.
 
-## Install (developer-side)
+## Getting started
+
+There are two common paths: install the skills for your own Claude Code sessions, or wire this repo into another repository so the whole team gets the same checked-in workflow.
+
+### Install locally
 
 To install the skills into your local Claude Code:
 
@@ -60,14 +77,14 @@ cd claude-platform
 
 Updates flow via `git pull` in the clone — no re-install needed unless new skills are added.
 
-## Wire up a consumer repo
+### Wire up a downstream repo
 
 See [`docs/getting-started.md`](docs/getting-started.md) for the full walkthrough. Short version:
 
-1. Create a `.platform-config.yml` at the consumer's root with the substitution values.
-2. Copy `.github/workflows/sync-from-upstream.yml.template` → `.github/workflows/sync-from-upstream.yml`, fill in `UPSTREAM_REPO`.
+1. Create a `.platform-config.yml` at the downstream repo root with substitution values.
+2. Copy `.github/workflows/sync-from-upstream.yml.template` to `.github/workflows/sync-from-upstream.yml`, then fill in `UPSTREAM_REPO`.
 3. (Skip — the manifest [`scripts/sync-targets.yml`](scripts/sync-targets.yml) is upstream-owned and ships the full skill set. Forks can edit it to add or drop entries.)
-4. Set the App-token secrets on the consumer (or as org-level secrets).
+4. Set the App-token secrets on the downstream repo or organization.
 5. Run the workflow once via `gh workflow run "Sync from upstream"` — the first PR opens cleanly.
 
 ## How to think about this project
@@ -76,12 +93,12 @@ The skills assume you're using a specific review chain (lean by default, deep fo
 
 The sync engine is intentionally minimal:
 
-- One upstream, one consumer, one manifest.
+- One upstream, one downstream repo, one manifest.
 - `<<KEY>>` find-and-replace, no template engine.
 - Daily PR open / merge cycle, with a tag-based gate (`sync-v1`) so unintended pushes to upstream main don't auto-propagate.
-- `delete: true` to retire a previously-synced file across all consumers.
+- `delete: true` to retire a previously-synced file across all downstream repos.
 
-It's not Renovate. It's not Dependabot. It's a deliberately small primitive for "one upstream, many consumers, propagate-by-PR."
+It's not Renovate. It's not Dependabot. It's a deliberately small primitive for "one upstream, many downstream repos, propagate-by-PR."
 
 ## Contributing
 

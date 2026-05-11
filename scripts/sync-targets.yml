@@ -101,11 +101,9 @@ targets:
     destination: .claude/settings.json
     substitutions: []
 
-  # Retired-stub deletes — carried forward from the prior upstream
-  # (loomantix/platform) so that consumers cutting over to this manifest
-  # without an intermediate sync still get the legacy files removed. Each
-  # entry can be deleted from this manifest once every consumer has run a
-  # sync that processed it.
+  # Retired-stub deletes — keep these while consumers may still have legacy
+  # files from an older sync surface. Each entry can be deleted from this
+  # manifest once downstream syncs have processed it.
   - destination: .claude/skills/pushit/SKILL.md
     delete: true
   - destination: .claude/skills/review-cycle/SKILL.md

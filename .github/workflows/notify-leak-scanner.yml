@@ -1,7 +1,23 @@
-# Notifies an off-repo scanner that this PR needs a private-reference scan.
-# The scanner posts a `private-reference-policy` check-run back here.
+# Notify the off-repo reference-policy scanner that this PR needs scanning.
 #
-# Kill switch: clear `vars.LEAK_DISPATCH_ENABLED` to stop dispatching.
+# Why this exists:
+#   The scanner lives outside this repository and posts a check-run back
+#   here. Without this workflow, that check only updates when the scanner's
+#   scheduled run fires, and GitHub Actions cron timing is nondeterministic
+#   on low-activity repositories.
+#
+# Threat model:
+#   Scanner policy contents stay outside this repository. The scanner posts
+#   only a generic pass/fail summary back to PRs here.
+#
+#   The App token is scoped to Actions access on the scanner repository.
+#   That's strictly less than the `contents: write` permission that
+#   `repository_dispatch` would require. Rotate credentials on schedule.
+#
+# Gating:
+#   The job is gated on `vars.LEAK_DISPATCH_ENABLED == '1'` so it stays
+#   dormant until the App, secrets, and repository variables are configured.
+#   The scanner's scheduled run remains a safety net.
 
 name: Notify leak scanner
 
@@ -26,24 +42,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - name: Validate scanner dispatch configuration
+        env:
+          TARGET_OWNER: ${{ vars.LEAK_SCAN_TARGET_OWNER }}
+          TARGET_REPOSITORY: ${{ vars.LEAK_SCAN_TARGET_REPOSITORY }}
+          TARGET_WORKFLOW: ${{ vars.LEAK_SCAN_TARGET_WORKFLOW }}
+          TARGET_REF: ${{ vars.LEAK_SCAN_TARGET_REF }}
+        run: |
+          set -euo pipefail
+          : "${TARGET_OWNER:?LEAK_SCAN_TARGET_OWNER variable is required}"
+          : "${TARGET_REPOSITORY:?LEAK_SCAN_TARGET_REPOSITORY variable is required}"
+          : "${TARGET_WORKFLOW:?LEAK_SCAN_TARGET_WORKFLOW variable is required}"
+          : "${TARGET_REF:?LEAK_SCAN_TARGET_REF variable is required}"
+
       - name: Generate App installation token
         id: app-token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
         with:
           app-id: ${{ secrets.LEAK_SCAN_DISPATCH_APP_ID }}
           private-key: ${{ secrets.LEAK_SCAN_DISPATCH_APP_KEY }}
-          owner: loomantix
-          repositories: platform
+          owner: ${{ vars.LEAK_SCAN_TARGET_OWNER }}
+          repositories: ${{ vars.LEAK_SCAN_TARGET_REPOSITORY }}
 
-      - name: Dispatch scan on private repo
+      - name: Dispatch scan
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr-number }}
+          TARGET_OWNER: ${{ vars.LEAK_SCAN_TARGET_OWNER }}
+          TARGET_REPOSITORY: ${{ vars.LEAK_SCAN_TARGET_REPOSITORY }}
+          TARGET_WORKFLOW: ${{ vars.LEAK_SCAN_TARGET_WORKFLOW }}
+          TARGET_REF: ${{ vars.LEAK_SCAN_TARGET_REF }}
         run: |
           set -euo pipefail
           echo "Dispatching scan for PR #${PR_NUMBER}"
           gh api -X POST \
-            "repos/loomantix/platform/actions/workflows/claude-platform-leak-scan.yml/dispatches" \
-            -f ref=main \
+            "repos/${TARGET_OWNER}/${TARGET_REPOSITORY}/actions/workflows/${TARGET_WORKFLOW}/dispatches" \
+            -f "ref=${TARGET_REF}" \
             -f "inputs[pr-number]=${PR_NUMBER}"
-          echo "Dispatched. Expect 'private-reference-policy' check-run within ~30s."
+          echo "Dispatched scanner workflow."

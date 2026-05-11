@@ -2,7 +2,7 @@
 
 A reusable set of [Claude Code](https://claude.com/claude-code) skills, agents, and a sync engine that propagates them to consumer repos. Apache 2.0 + DCO.
 
-> **Status:** v0.1 — initial extraction from Loomantix's internal platform repo. Production-tested across a four-repo fleet for ~6 months before extraction.
+> **Status:** v0.1 — public bootstrap release. APIs and workflows may evolve as the sync surface stabilizes.
 
 ## What's in here
 

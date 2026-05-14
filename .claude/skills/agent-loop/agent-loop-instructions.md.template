@@ -59,32 +59,77 @@ If your issue requires changing any of these, **stop and post a comment on the i
 
 If you discover any of these mid-issue, **stop, comment on the issue with what you found, and exit without a PR**:
 
+- **Issue title starts with `Epic:`, contains `extractable as @`, or otherwise reads as cross-repo coordination work.** Epics are not bounded implementation tasks — they're tracking issues. Past agent-loop runs have wasted budget reading an entire epic body before bailing; bail at the title.
 - The issue requires touching another repository (cross-repo coordination).
+- The issue is "submit a form to a regulator," "procure a certificate," "rotate a production secret," or any other action whose deliverable is a signed PDF, an email to a government mailbox, or a Vault/secret-store mutation — not code. A short comment back is enough.
 - The issue has open policy questions — re-read the body; if it asks "should we A or B?" or "decision needed," that's a human call.
 - The issue requires deleting org-level secrets, modifying branch protection, or installing GitHub Apps — these have organization-wide blast radius and need human verification.
 - Acceptance criteria can't be satisfied without changing the synced surfaces listed above.
+- **Your branch's diff vs current `origin/main` shows large DELETIONS in files you didn't author.** This is the stacked-PR-revert trap: a sibling iteration's PR merged to `main` mid-loop, and your branch's baseline now predates it, so opening this PR would _revert_ the sibling's work. Comment on the issue noting the sibling-merge race and exit — the human can re-run after the dust settles.
 
-## Pre-push review (if these skills are available)
+## Pre-push checks
 
-Before pushing your PR, run the lean review chain (skip on docs/config-only changes):
+**Don't try to invoke `/refactorpass`, `/grill`, `/deepgrill`, or `/reviewit` from this script.** Slash-command skills don't reliably activate in `claude --print` (one-shot, non-interactive) mode — the inner Claude treats "if these skills are available" as license to skip and they end up not running. The loop wrapper is being updated upstream (tracked in this repo's issue tracker) to invoke them deterministically; until that lands, leave the pre-push refactor pass and the post-push reviewer chain to the human operator.
 
-1. `/refactorpass` — single `/simplify` pass.
-2. `/grill` — runs `code-reviewer` and `silent-failure-hunter` agents on the diff.
+Do **shell-level** checks instead — they actually work in `--print` mode. Substitute the actual commands from your "Build / test" section above:
+
+```bash
+<typecheck command>           # whole repo, fast
+<test command, scoped>        # only the area you touched
+<lint command>                # auto-fix what's fixable; verify nothing complains after
+```
+
+A green diff against typecheck + targeted test + lint is a much stronger ship-readiness signal than a skipped-because-not-available slash-command.
+
+## Pre-PR sanity check (CRITICAL)
+
+Before opening the PR, run this and read it:
+
+```bash
+git diff --stat origin/main..HEAD | tail -3
+git log --oneline origin/main..HEAD
+```
+
+Two failure modes to catch here:
+
+1. **Reverting another iteration's work.** If the diffstat shows DELETIONS in files you didn't touch (the bullet in the guardrail section above), your branch's baseline predates a sibling iteration's merge. Stop.
+2. **Cross-cutting scope from prior iterations.** If `git log` shows commits you didn't author (typically merges from the agent-loop collection branch), your PR's diff vs `main` will include their work. Don't pretend it's your issue's scope — call it out in the PR body's "Also in this PR" section (template below). A `test(mobile):` PR that quietly ships a backend production change is a review-trust violation.
 
 ## PR shape
 
 ```markdown
 ## Summary
 
-<1–3 bullets, what changed and why>
+<1–3 bullets, what changed and why — scoped to YOUR assigned issue>
+
+## Also in this PR (cross-cutting scope)
+
+<Only include this section if `git log origin/main..HEAD` shows commits
+you didn't author — i.e., your branch carried prior-iteration content
+forward via the agent-loop collection branch. List each cross-cutting
+change with the issue it closes, so reviewers see the full scope.>
+
+- **<area> — <one-line summary>** (`path/to/main/file.ts`): <why>.
+  Closes #<other-issue>.
 
 ## Test plan
 
-- [ ] <build command>
-- [ ] <test command>
+- [ ] <typecheck command>
+- [ ] <test command, scoped>
+- [ ] <lint command>
 - [ ] <issue-specific verification>
+
+## Agent-loop context
+
+This PR is iteration <N> of an agent-loop run on collection branch
+`<branch-name>`. A summary PR will be opened at the end of the run
+consolidating all iterations — recommended merge unit is the summary
+PR; merging this per-issue PR in isolation risks the stacked-PR-revert
+trap once siblings merge.
 
 Closes #<N>
 ```
 
-After opening the PR, run `/reviewit <pr-number>` to fire AI reviews and address findings. The lean default caps at 2 iterations.
+**PR title honesty.** The title must match the BIGGEST scope item in the diff, not just your assigned issue. If the diff carries an unrelated change from a prior iteration alongside your issue's work, prefer a neutral title (`chore: agent-loop iteration N — <areas>`) or a multi-area conventional commit (`feat(backend,mobile): …`). A title that lies about scope wastes reviewer time and almost always triggers AI-reviewer findings about "PR description focuses on X but introduces Y."
+
+**Do not run `/reviewit` yourself.** The human will trigger `/reviewit <pr-number>` on whichever PR they want reviewed (usually the summary PR for a bundled run, not the per-issue PRs).

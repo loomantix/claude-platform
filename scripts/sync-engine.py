@@ -30,6 +30,7 @@ import argparse
 import errno
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Required, TypedDict
@@ -141,7 +142,12 @@ def write_if_changed(path: Path, content: str, mode: int | None) -> bool:
     if changed:
         path.write_text(content, encoding="utf-8")
     if mode is not None:
-        current = path.stat().st_mode & 0o777
+        # `stat.S_IMODE` keeps the full 12-bit permission set (setuid +
+        # setgid + sticky + rwx*3). `& 0o777` would mask off the upper
+        # 3 bits, so a manifest entry like `mode: 0o4755` would never
+        # match the current mode and the file would be re-chmod'd on
+        # every sync run.
+        current = stat.S_IMODE(path.stat().st_mode)
         if current != mode:
             path.chmod(mode)
             changed = True
@@ -206,9 +212,22 @@ def parse_mode(value: object) -> int | None:
     """
     if value is None:
         return None
+    if isinstance(value, bool):
+        # `bool` is a subclass of `int`; reject explicitly so a stringly-
+        # typed `true` / `false` doesn't become `mode: 1` / `mode: 0`.
+        raise TypeError(f"mode must be int or str, got bool: {value!r}")
     if isinstance(value, int):
-        return value
-    return int(value, 8)
+        mode_int = value
+    elif isinstance(value, str):
+        mode_int = int(value, 8)
+    else:
+        raise TypeError(f"mode must be int, str, or None; got {type(value).__name__}")
+    if not 0 <= mode_int <= 0o7777:
+        # Negative or >12-bit values pass `int(_, 8)` but break `Path.chmod`
+        # mid-loop with `OverflowError`, half-syncing the consumer tree.
+        # Fail-closed before any write happens.
+        raise ValueError(f"mode out of range [0, 0o7777]: {value!r}")
+    return mode_int
 
 
 def parse_args() -> argparse.Namespace:
@@ -301,12 +320,20 @@ def main() -> int:
         # surprise. `mode` only validates here for non-delete targets —
         # `parse_mode` raises on bad input, and a `mode` field on a
         # delete target is meaningless.
-        for field, value in (("source", source_rel), ("destination", dest_rel)):
-            if value is None:
-                continue
-            if not isinstance(value, str) or not value or value in (".", ".."):
-                sys.stderr.write(f"  ❌ `{field}` must be a non-empty path string, got {value!r}: {target!r}\n")
-                return 1
+        if dest_rel is not None and (
+            not isinstance(dest_rel, str) or not dest_rel or dest_rel in (".", "..")
+        ):
+            sys.stderr.write(
+                f"  ❌ `destination` must be a non-empty path string, got {dest_rel!r}: {target!r}\n"
+            )
+            return 1
+        if source_rel is not None and (
+            not isinstance(source_rel, str) or not source_rel or source_rel in (".", "..")
+        ):
+            sys.stderr.write(
+                f"  ❌ `source` must be a non-empty path string, got {source_rel!r}: {target!r}\n"
+            )
+            return 1
 
         # `source` is required for copy entries but optional for delete entries
         # (the source file may no longer exist in the upstream — that's the
@@ -409,6 +436,15 @@ def main() -> int:
         # Same path-bound check on `source` as `destination` — a manifest
         # typo with `..` segments would otherwise read arbitrary files
         # from the runner filesystem rather than from the upstream repo.
+        # Explicit guard (not `assert`) so this still narrows under
+        # `python -O` — the malformed-entry check above also rejects None
+        # for copy targets, so this branch is defense-in-depth.
+        if source_rel is None:
+            sys.stderr.write(
+                f"  ❌ internal invariant violated: copy target reached "
+                f"source-resolve with `source` unset: {target!r}\n"
+            )
+            return 1
         source_path = resolve_under(upstream_repo, source_rel)
         if source_path is None:
             sys.stderr.write(f"  ❌ source escapes upstream repo: {source_rel}\n")
@@ -427,7 +463,7 @@ def main() -> int:
 
         if args.dry_run:
             existing = dest_path.read_text(encoding="utf-8") if dest_path.is_file() else None
-            current_mode = (dest_path.stat().st_mode & 0o777) if dest_path.is_file() else None
+            current_mode = stat.S_IMODE(dest_path.stat().st_mode) if dest_path.is_file() else None
             content_diverged = existing != substituted
             mode_diverged = mode is not None and current_mode is not None and current_mode != mode
             if content_diverged or mode_diverged:

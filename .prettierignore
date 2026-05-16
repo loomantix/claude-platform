@@ -1,8 +1,14 @@
 # Build artifacts and dependencies
 node_modules/
 .venv/
+.venv-test/
 venv/
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+
+# Python project config — Prettier has no built-in TOML parser
+pyproject.toml
 
 # Lockfiles managed by their tools
 package-lock.json

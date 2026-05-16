@@ -14,10 +14,12 @@ __pycache__/
 
 # Python venvs (if anyone sets one up to run the engine locally)
 .venv/
+.venv-test/
 venv/
 
-# Test artifacts (in case a future test suite drops things here)
+# Test artifacts
 .pytest_cache/
+.mypy_cache/
 .ruff_cache/
 .coverage
 coverage/

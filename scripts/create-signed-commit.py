@@ -51,7 +51,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 
 class StatusChanges(NamedTuple):
@@ -75,12 +75,14 @@ def _github_request(
     path: str,
     token: str,
     body: dict[str, Any] | None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """Internal: issue a GitHub REST request. Returns parsed JSON, or raises HTTPError.
 
     Callers should use `github_api` (errors are fatal) or `github_api_optional`
     (404 returns None, other errors fatal) — both surface a clear contract at
-    the call site.
+    the call site. The Contents API endpoints this script hits always return
+    JSON objects; a non-object response is treated as a hard error here so
+    callers can rely on a `dict[str, Any]` shape downstream.
     """
     url = f"https://api.github.com{path}"
     data = json.dumps(body).encode() if body is not None else None
@@ -95,7 +97,13 @@ def _github_request(
     # Bound network wait — a hung connection on the runner shouldn't
     # consume the entire workflow timeout (5 min default).
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
+        parsed = json.loads(resp.read())
+    if not isinstance(parsed, dict):
+        sys.stderr.write(
+            f"GitHub API {method} {path}: expected JSON object, got {type(parsed).__name__}\n"
+        )
+        sys.exit(1)
+    return cast(dict[str, Any], parsed)
 
 
 def _exit_on_http_error(method: str, path: str, e: urllib.error.HTTPError) -> None:
@@ -115,12 +123,10 @@ def github_api(
 ) -> dict[str, Any]:
     """Issue a GitHub REST request. Returns parsed JSON. Exits on any error."""
     try:
-        result = _github_request(method, path, token, body)
+        return _github_request(method, path, token, body)
     except urllib.error.HTTPError as e:
         _exit_on_http_error(method, path, e)
         raise  # unreachable; satisfies the type checker
-    assert result is not None  # _github_request only returns None when raising
-    return result
 
 
 def github_api_optional(

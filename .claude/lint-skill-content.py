@@ -472,7 +472,7 @@ def run_self_test() -> int:
     # _path_in_scope coverage assertions — lock the SCOPE_SUFFIXES behavior
     # so a future refactor can't silently drop `.template` from scope
     # (which would re-open the prompt-template gap closed in PR #30 iter 1).
-    path_in_scope_cases = [
+    path_in_scope_cases: list[tuple[str, bool, str]] = [
         # (path, expected_in_scope, label)
         (".claude/skills/agent-loop/SKILL.md", True, "skills SKILL.md"),
         (".claude/agents/code-reviewer.md", True, "agents .md"),
@@ -488,10 +488,11 @@ def run_self_test() -> int:
         ("docs/foo.md", False, ".md outside DIFF_DIRS"),
         (".claude/skills/agent-loop/notes.txt", False, ".txt outside SCOPE_SUFFIXES"),
     ]
-    for path, expected, label in path_in_scope_cases:
-        if _path_in_scope(path) != expected:
+    for path, expected_in_scope, label in path_in_scope_cases:
+        if _path_in_scope(path) != expected_in_scope:
             failures.append(
-                f"_path_in_scope({label}, {path!r}): expected {expected}, got {not expected}"
+                f"_path_in_scope({label}, {path!r}): "
+                f"expected {expected_in_scope}, got {not expected_in_scope}"
             )
     if failures:
         print("Self-test failures:", file=sys.stderr)

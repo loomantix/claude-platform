@@ -206,8 +206,14 @@ def parse_mode(value: object) -> int | None:
     """
     if value is None:
         return None
+    if isinstance(value, bool):
+        # `bool` is a subclass of `int`; reject explicitly so a stringly-
+        # typed `true` / `false` doesn't become `mode: 1` / `mode: 0`.
+        raise TypeError(f"mode must be int or str, got bool: {value!r}")
     if isinstance(value, int):
         return value
+    if not isinstance(value, str):
+        raise TypeError(f"mode must be int, str, or None; got {type(value).__name__}")
     return int(value, 8)
 
 
@@ -300,13 +306,23 @@ def main() -> int:
         # clean error rather than a downstream TypeError or write-the-cwd
         # surprise. `mode` only validates here for non-delete targets —
         # `parse_mode` raises on bad input, and a `mode` field on a
-        # delete target is meaningless.
-        for field, value in (("source", source_rel), ("destination", dest_rel)):
-            if value is None:
-                continue
-            if not isinstance(value, str) or not value or value in (".", ".."):
-                sys.stderr.write(f"  ❌ `{field}` must be a non-empty path string, got {value!r}: {target!r}\n")
-                return 1
+        # delete target is meaningless. isinstance checks here also narrow
+        # `source_rel` / `dest_rel` from `Any | None` to `str | None` for
+        # the rest of the loop.
+        if dest_rel is not None and (
+            not isinstance(dest_rel, str) or not dest_rel or dest_rel in (".", "..")
+        ):
+            sys.stderr.write(
+                f"  ❌ `destination` must be a non-empty path string, got {dest_rel!r}: {target!r}\n"
+            )
+            return 1
+        if source_rel is not None and (
+            not isinstance(source_rel, str) or not source_rel or source_rel in (".", "..")
+        ):
+            sys.stderr.write(
+                f"  ❌ `source` must be a non-empty path string, got {source_rel!r}: {target!r}\n"
+            )
+            return 1
 
         # `source` is required for copy entries but optional for delete entries
         # (the source file may no longer exist in the upstream — that's the
@@ -409,6 +425,9 @@ def main() -> int:
         # Same path-bound check on `source` as `destination` — a manifest
         # typo with `..` segments would otherwise read arbitrary files
         # from the runner filesystem rather than from the upstream repo.
+        # `source_rel` is guaranteed non-empty str here by the malformed-
+        # entry check above (delete_flag is False past the unlink branch).
+        assert source_rel is not None
         source_path = resolve_under(upstream_repo, source_rel)
         if source_path is None:
             sys.stderr.write(f"  ❌ source escapes upstream repo: {source_rel}\n")

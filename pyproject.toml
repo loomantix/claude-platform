@@ -1,0 +1,60 @@
+[project]
+name = "claude-platform"
+version = "0.0.0"
+description = "Upstream source for Claude Code skills + sync engine. Not published; this file exists only to configure local tooling (pytest, mypy, coverage, ruff)."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+filterwarnings = [
+    "error",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["scripts", ".claude"]
+omit = [
+    "tests/*",
+    # The lint scripts are exercised by their own --self-test invocations
+    # in CI (see ci.yml). Pytest coverage on them would duplicate that
+    # surface without adding signal.
+    ".claude/lint-skill-content.py",
+    ".claude/lint-claude-cli-invocations.py",
+]
+
+[tool.coverage.report]
+precision = 1
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+# Tests import the scripts via a sys.path shim in conftest.py — mypy needs
+# the same view of the import surface to type-check them in place.
+mypy_path = ["scripts", ".claude"]
+files = [
+    "scripts",
+    ".claude/lint-skill-content.py",
+    ".claude/lint-claude-cli-invocations.py",
+    "tests",
+]
+# Scripts use hyphens in filenames (sync-engine.py, create-signed-commit.py)
+# which aren't valid Python module names. Tests import them via importlib;
+# mypy follows the imports without needing module-name resolution.
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = false

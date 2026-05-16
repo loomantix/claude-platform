@@ -1,0 +1,40 @@
+name: CodeQL
+
+# Sync engine + create-signed-commit run with cross-org org-scoped App
+# tokens in the consumer fleet. CodeQL's default Python query suite
+# catches taint flows that ruff and mypy don't — explicit defense
+# against a logic-bomb landing here (red-team report sections 1.2 + 11.3).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly scan so a query-suite improvement at upstream catches
+    # latent vulnerabilities even if no PR touched the file.
+    - cron: '17 9 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
+        with:
+          languages: python
+          queries: +security-extended
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
+        with:
+          category: '/language:python'

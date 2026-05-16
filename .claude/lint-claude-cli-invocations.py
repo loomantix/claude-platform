@@ -874,10 +874,10 @@ def run_self_test() -> int:
         # the same logical region hash differently.
         lf_disk_path = os.path.join(tmp, "lf.sh")
         crlf_disk_path = os.path.join(tmp, "crlf.sh")
-        with open(lf_disk_path, "wb") as fh:
-            fh.write(_FIXTURE_WHITESPACE_SENSITIVE_A.encode("utf-8"))
-        with open(crlf_disk_path, "wb") as fh:
-            fh.write(_FIXTURE_CRLF_MARKERS.encode("utf-8"))
+        with open(lf_disk_path, "wb") as fb:
+            fb.write(_FIXTURE_WHITESPACE_SENSITIVE_A.encode("utf-8"))
+        with open(crlf_disk_path, "wb") as fb:
+            fb.write(_FIXTURE_CRLF_MARKERS.encode("utf-8"))
         lf_text = _read_file_preserving_newlines(lf_disk_path)
         crlf_text = _read_file_preserving_newlines(crlf_disk_path)
         lf_disk_regions, _ = extract_regions(lf_disk_path, lf_text)

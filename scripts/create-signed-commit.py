@@ -51,7 +51,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 
 class StatusChanges(NamedTuple):
@@ -95,7 +95,13 @@ def _github_request(
     # Bound network wait — a hung connection on the runner shouldn't
     # consume the entire workflow timeout (5 min default).
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
+        parsed = json.loads(resp.read())
+    if not isinstance(parsed, dict):
+        sys.stderr.write(
+            f"GitHub API {method} {path}: expected JSON object, got {type(parsed).__name__}\n"
+        )
+        sys.exit(1)
+    return cast("dict[str, Any]", parsed)
 
 
 def _exit_on_http_error(method: str, path: str, e: urllib.error.HTTPError) -> None:

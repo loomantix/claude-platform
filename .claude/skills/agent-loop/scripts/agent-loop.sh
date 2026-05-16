@@ -355,6 +355,30 @@ PUSH_FAILURES=0
 MAX_CLAIM_FAILURES=3
 MAX_PUSH_FAILURES=2
 
+# claude-cli-invocations:start
+# Locked region — one-shot prompt template resolution.
+# Bail before the first claim happens if the template is unusable, so a
+# misconfigured prompt.txt can't leave a half-orphaned issue behind.
+PROMPT_FILE="$PROJECT_DIR/.claude/skills/agent-loop/prompt.txt"
+if [ -s "$PROMPT_FILE" ] && [ -r "$PROMPT_FILE" ]; then
+    PROMPT_TEMPLATE=$(cat "$PROMPT_FILE")
+else
+    # Fallback for consumers between repo creation and first upstream sync.
+    PROMPT_TEMPLATE="Read @agent-loop-instructions.md and follow the instructions. Your assigned issue is #{ISSUE_ID}. Run 'gh issue view {ISSUE_ID}' to see the full description, then complete it."
+fi
+if [ -z "$PROMPT_TEMPLATE" ]; then
+    echo -e "${RED}✗${NC} prompt template empty after read — aborting"
+    exit 1
+fi
+# The substitution silently no-ops without this placeholder, which would
+# launch Claude with an issue-less prompt and either wrong-task or stall.
+if [[ "$PROMPT_TEMPLATE" != *"{ISSUE_ID}"* ]]; then
+    echo -e "${RED}✗${NC} prompt template missing {ISSUE_ID} placeholder: $PROMPT_FILE"
+    echo "    Restore the placeholder or delete the file to use the upstream default."
+    exit 1
+fi
+# claude-cli-invocations:end
+
 while [ $ITERATION -lt $MAX_ITERATIONS ]; do
     if ! git diff --quiet || ! git diff --cached --quiet; then
         echo -e "${YELLOW}› Dirty working tree — resetting to last commit...${NC}"
@@ -467,26 +491,9 @@ while [ $ITERATION -lt $MAX_ITERATIONS ]; do
     CLAUDE_ERR="$ITER_TMPDIR/claude.err"
 
     # claude-cli-invocations:start
-    # Locked region — see .claude/lint-claude-cli-invocations.py.
-    PROMPT_FILE="$PROJECT_DIR/.claude/skills/agent-loop/prompt.txt"
-    if [ -s "$PROMPT_FILE" ] && [ -r "$PROMPT_FILE" ]; then
-        PROMPT_TEMPLATE=$(cat "$PROMPT_FILE")
-    else
-        # Fallback for consumers between repo creation and first upstream sync.
-        PROMPT_TEMPLATE="Read @agent-loop-instructions.md and follow the instructions. Your assigned issue is #{ISSUE_ID}. Run 'gh issue view {ISSUE_ID}' to see the full description, then complete it."
-    fi
-    if [ -z "$PROMPT_TEMPLATE" ]; then
-        echo -e "${RED}✗${NC} prompt template empty after read — aborting iteration"
-        exit 1
-    fi
-    # The substitution silently no-ops if `{ISSUE_ID}` is absent, which
-    # would launch Claude with an issue-less prompt — the inner Claude
-    # would then either work the wrong task or stall asking what to do.
-    if [[ "$PROMPT_TEMPLATE" != *"{ISSUE_ID}"* ]]; then
-        echo -e "${RED}✗${NC} prompt template missing {ISSUE_ID} placeholder: $PROMPT_FILE"
-        echo "    Restore the placeholder or delete the file to use the upstream default."
-        exit 1
-    fi
+    # Per-iteration locked region — substitution + claude invocation.
+    # Template resolution + validation happens once before the loop (see
+    # the other locked region above) so a config error can't orphan a claim.
     # Explicit guard, not a comment claim — pick_next_issue's number-from-jq
     # path is always digits today, but a future refactor could change that.
     if ! [[ "$CLAIMED_ID" =~ ^[0-9]+$ ]]; then

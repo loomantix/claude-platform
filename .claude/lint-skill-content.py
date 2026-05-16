@@ -569,7 +569,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Scan every tracked skill/agent .md file (not just diff).",
+        help="Scan every tracked file in scope (.md and .template) under "
+        ".claude/skills/ and .claude/agents/, not just the diff.",
     )
     args = parser.parse_args(argv)
 

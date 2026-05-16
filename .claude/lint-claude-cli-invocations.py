@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -54,8 +55,15 @@ END_MARKER = "# claude-cli-invocations:end"
 # `--permission-mode` and `bypassPermissions` literals catch the dangerous
 # escalation signal directly even when the binary name has been variable-
 # aliased (`CMD=claude; $CMD --permission-mode bypassPermissions ...`).
-# Trivial obfuscation of these flag literals via bash quote-concat is left
-# to reviewer + CODEOWNERS defense.
+#
+# Out-of-model (explicitly NOT caught — relies on CODEOWNERS + reviewer
+# attention as the structural defense):
+#  - Bare-word positional invocations: `claude help`, `claude prompt.txt`,
+#    `claude foo` (where `foo` doesn't start with `-`, `"`, `'`, `$`, or `<`).
+#    Detecting these reliably without false-flagging benign `claude exited`
+#    -style echo strings would require a quote-state tracker.
+#  - Bash quote-concat of the flag literals: `--per""mission-mode`,
+#    `bypa""ssPermissions`. Same false-flag-vs-coverage trade-off.
 SENSITIVE_TOKEN_RE = re.compile(
     r"(?<![\w.-])claude\s+(?:--?|[\"'$<])"
     r"|--permission-mode"
@@ -242,8 +250,6 @@ def _synced_shell_sources() -> tuple[list[str], list[str]]:
     .sh file landing outside `.claude/skills/` (e.g. a future `.claude/hooks/`
     or any other manifest target).
     """
-    import os
-
     errors: list[str] = []
     try:
         import yaml
@@ -684,6 +690,29 @@ def run_self_test() -> int:
         f"got {inv!r}",
     )
 
+    # Direct `_join_continuations` unit tests — lock the four documented
+    # behaviors so a regex regression doesn't slip past `find_sensitive_token_lines`
+    # by happening to still produce a match.
+    join_cases = [
+        # (label, input, expected output)
+        ("single-line passthrough", "a\nb\n", [(1, "a"), (2, "b")]),
+        ("normal join", "a \\\nb\n", [(1, "a b")]),
+        ("triple join", "a \\\nb \\\nc\n", [(1, "a b c")]),
+        # Escaped trailing backslash (`\\` at EOL) is NOT a continuation —
+        # it's a literal pair. The line stands alone.
+        ("escaped backslash not a continuation", "a \\\\\nb\n", [(1, "a \\\\"), (2, "b")]),
+        # Unclosed trailing continuation at EOF — emit what we have.
+        ("unclosed trailing continuation", "a \\\n", [(1, "a")]),
+        # Empty input.
+        ("empty input", "", []),
+        # Continuation with trailing whitespace after the backslash —
+        # `rstrip()` normalizes so the `\\` at the visual EOL still wins.
+        ("continuation with trailing space", "a \\  \nb\n", [(1, "a b")]),
+    ]
+    for label, text_in, expected in join_cases:
+        actual = _join_continuations(text_in)
+        check(f"_JOIN/{label}", actual == expected, f"got {actual!r}")
+
     # --- end-to-end scan integration ---
     import contextlib
     import io
@@ -827,9 +856,14 @@ def run_self_test() -> int:
             sha256=hash_region(dup_regions[0]), path=dup_path, description="test"
         )
         n, out = scan_into([dup_path], [dup_entry])
+        # First region matches allowlist (no finding); second region trips
+        # the duplicate detector exactly once. Tight `n == 1` catches a
+        # regression where the second region ALSO hits the hash-mismatch
+        # gate (which the `continue` after the duplicate emit is meant to
+        # prevent).
         check(
             "SCAN(duplicate-region) flagged within same file",
-            n >= 1 and "duplicate locked region" in out,
+            n == 1 and "duplicate locked region" in out,
             f"got {n}; output:\n{out}",
         )
 
@@ -915,8 +949,6 @@ def run_self_test() -> int:
     # surfaces, non-.sh sources are filtered out, malformed YAML and
     # missing manifests produce clear errors. Runs in a tempdir-as-cwd so
     # the test never touches the real `scripts/sync-targets.yml`.
-    import os
-
     test_cases: list[tuple[str, str, list[str], bool]] = [
         # (label, manifest_yaml, expected_sources, expect_errors)
         (
@@ -962,7 +994,6 @@ def run_self_test() -> int:
             False,
         ),
     ]
-    original_path = SYNC_TARGETS_PATH
     for label, yaml_text, expected_sources, expect_errors in test_cases:
         with tempfile.TemporaryDirectory() as tmp:
             cwd_was = os.getcwd()
@@ -1000,7 +1031,6 @@ def run_self_test() -> int:
             sources == [] and any("not found" in e for e in errors),
             f"got sources={sources!r} errors={errors!r}",
         )
-    _ = original_path  # silence unused-name lint
 
     # --- dataclass invariant enforcement ---
     try:

@@ -6,13 +6,13 @@ name: CodeQL
 # against a logic-bomb landing here (red-team report sections 1.2 + 11.3).
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   schedule:
     # Weekly scan so a query-suite improvement at upstream catches
-    # latent vulnerabilities even if no PR touched the file.
+    # latent vulnerabilities even if no PR touched the file. Push-to-main
+    # is intentionally omitted — branch protection means every main
+    # commit arrives via a PR that already ran this analysis.
     - cron: '17 9 * * 1'
 
 permissions:

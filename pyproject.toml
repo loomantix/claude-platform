@@ -13,7 +13,15 @@ addopts = [
     "--strict-config",
 ]
 filterwarnings = [
-    "error",
+    # Treat warnings raised inside our own code as errors so a future
+    # DeprecationWarning from `urllib`/`pathlib`/etc. surfaces loudly.
+    # Stdlib- and third-party-internal warnings stay informational so a
+    # transient pytest/setuptools deprecation can't break CI on a green
+    # PR.
+    "error:::scripts.*",
+    "error:::tests.*",
+    "error:::sync_engine",
+    "error:::create_signed_commit",
 ]
 
 [tool.coverage.run]

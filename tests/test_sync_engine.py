@@ -285,7 +285,7 @@ def _run_main(
     upstream: Path,
     consumer: Path,
     monkeypatch: pytest.MonkeyPatch,
-    extra_args: list[str] | None = None,
+    dry_run: bool = False,
 ) -> int:
     argv = [
         "sync-engine.py",
@@ -294,8 +294,8 @@ def _run_main(
         "--consumer-dir",
         str(consumer),
     ]
-    if extra_args:
-        argv.extend(extra_args)
+    if dry_run:
+        argv.append("--dry-run")
     monkeypatch.setattr("sys.argv", argv)
     return int(sync_engine.main())
 
@@ -329,7 +329,6 @@ def test_main_delete_target_unlinks_real_file(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"destination": "stale.md", "delete": True}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 0
@@ -353,7 +352,6 @@ def test_main_delete_target_unlinks_dangling_symlink(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"destination": "dangling", "delete": True}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 0
@@ -372,7 +370,6 @@ def test_main_delete_refuses_directory(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"destination": "subdir", "delete": True}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -391,7 +388,6 @@ def test_main_delete_is_idempotent_when_already_absent(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"destination": "never-existed.md", "delete": True}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 0
@@ -411,7 +407,6 @@ def test_main_rejects_stringly_typed_delete_flag(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"destination": "x.md", "delete": "true"}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -435,7 +430,6 @@ def test_main_rejects_stringly_typed_create_if_missing(
             ]
         },
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -458,7 +452,6 @@ def test_main_rejects_delete_and_create_if_missing_together(
             ]
         },
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -477,7 +470,6 @@ def test_main_rejects_bare_scalar_target(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": ["just a string, not a mapping"]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -497,7 +489,6 @@ def test_main_rejects_dot_destination(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "src.md", "destination": "."}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -515,7 +506,6 @@ def test_main_rejects_destination_escaping_consumer_root(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "src.md", "destination": "../escape.md"}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -534,7 +524,6 @@ def test_main_rejects_source_escaping_upstream_root(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "../etc/passwd", "destination": "x.md"}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -553,7 +542,6 @@ def test_main_rejects_mode_on_delete_target(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"destination": "x.md", "delete": True, "mode": "0755"}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -592,7 +580,6 @@ def test_main_create_if_missing_bootstraps_first_time(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "src.md", "destination": "out.md", "create_if_missing": True}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 0
@@ -612,7 +599,6 @@ def test_main_create_if_missing_preserves_consumer_edits(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "src.md", "destination": "out.md", "create_if_missing": True}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 0
@@ -636,7 +622,6 @@ def test_main_create_if_missing_preserves_dangling_symlink(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "src.md", "destination": "out.md", "create_if_missing": True}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 0
@@ -656,7 +641,6 @@ def test_main_create_if_missing_refuses_directory(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "src.md", "destination": "out.md", "create_if_missing": True}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -675,7 +659,6 @@ def test_main_missing_required_substitution_exits_1(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "src.md", "destination": "dest.md", "substitutions": ["NAME"]}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})  # no `substitutions` block
 
     # substitute() calls sys.exit(1) on missing required — that bubbles up
     # through main().
@@ -695,7 +678,6 @@ def test_main_applies_mode_to_copied_file(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "script.sh", "destination": "out.sh", "mode": "0755"}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 0
@@ -714,9 +696,8 @@ def test_main_dry_run_does_not_write(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "src.md", "destination": "dest.md"}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
-    rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch, ["--dry-run"])
+    rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch, dry_run=True)
     assert rc == 0
     assert not (consumer_dir / "dest.md").exists()
     out = capsys.readouterr().out
@@ -737,9 +718,8 @@ def test_main_dry_run_reports_mode_only_diff(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "script.sh", "destination": "out.sh", "mode": "0755"}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
-    rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch, ["--dry-run"])
+    rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch, dry_run=True)
     assert rc == 0
     out = capsys.readouterr().out
     assert "would write out.sh (mode)" in out
@@ -757,7 +737,6 @@ def test_main_missing_source_file_returns_1(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "missing.md", "destination": "dest.md"}]},
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1
@@ -776,7 +755,6 @@ def test_main_rejects_top_level_targets_not_a_list(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": {"src.md": "dest.md"}},  # mapping, not list
     )
-    _write_yaml(consumer_dir / ".platform-config.yml", {})
 
     rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
     assert rc == 1

@@ -32,42 +32,39 @@ jobs:
       - name: Ruff lint
         run: ruff check .
 
-  mypy:
-    name: Python type-check (mypy --strict)
+  python-types-and-tests:
+    name: Python types + tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Install mypy + pyyaml + types stubs
-        run: python3 -m pip install 'mypy==1.13.0' 'pyyaml==6.0.2' 'types-PyYAML==6.0.12.20240917'
+      - name: Install pinned tooling
+        run: |
+          python3 -m pip install \
+            'mypy==1.13.0' \
+            'pyyaml==6.0.2' \
+            'types-PyYAML==6.0.12.20240917' \
+            'pytest==8.3.4' \
+            'pytest-cov==6.0.0'
       - name: mypy --strict (config from pyproject.toml)
         run: python3 -m mypy
-
-  pytest:
-    name: Python tests + coverage (>=80%)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install pytest + pyyaml
-        run: python3 -m pip install 'pytest==8.3.4' 'pytest-cov==6.0.0' 'pyyaml==6.0.2'
       - name: Configure git identity (parse_status tests use a fixture git repo)
         run: |
           git config --global user.email "ci@example.invalid"
           git config --global user.name "CI"
           git config --global init.defaultBranch main
-      - name: Run pytest with coverage gate
-        run: |
-          set -euo pipefail
-          python3 -m pytest tests/ \
-            --cov \
-            --cov-report=term-missing \
-            --cov-fail-under=80 \
-            -ra
+      - name: Run pytest + write coverage data
+        run: python3 -m pytest tests/ --cov --cov-report=term-missing -ra
+      # Per-file gate matches the spec ("≥80% coverage on
+      # scripts/sync-engine.py + scripts/create-signed-commit.py") so a
+      # future refactor that spikes one file's coverage can't paper over
+      # a regression in the other.
+      - name: Coverage gate — sync-engine.py >=80%
+        run: python3 -m coverage report --include='scripts/sync-engine.py' --fail-under=80
+      - name: Coverage gate — create-signed-commit.py >=80%
+        run: python3 -m coverage report --include='scripts/create-signed-commit.py' --fail-under=80
 
   shell:
     name: Shell syntax + shellcheck

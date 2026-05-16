@@ -14,7 +14,6 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Iterator
 
 import pytest
 
@@ -56,18 +55,12 @@ def upstream_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def consumer_dir(tmp_path: Path) -> Path:
-    """A skeleton consumer working tree. Tests write their own .platform-config.yml."""
+    """A consumer working tree with an empty `.platform-config.yml`.
+
+    Tests that need substitutions or skip_targets overwrite the file in-
+    place. The default empty config means most tests can omit the boilerplate.
+    """
     consumer = tmp_path / "consumer"
     consumer.mkdir()
+    (consumer / ".platform-config.yml").write_text("")
     return consumer
-
-
-@pytest.fixture
-def write_targets(upstream_repo: Path) -> Iterator[None]:
-    """Sentinel to mark that a test should populate sync-targets.yml itself.
-
-    No-op placeholder; tests use `upstream_repo` directly. Kept for
-    discoverability — if a future test wants a helper that writes a
-    canonical-shape manifest, it can hook here.
-    """
-    yield None

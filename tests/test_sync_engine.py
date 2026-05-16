@@ -752,7 +752,11 @@ def test_main_dry_run_reports_mode_only_diff(
 ) -> None:
     (upstream_repo / "script.sh").write_text("#!/bin/sh\n")
     (consumer_dir / "out.sh").write_text("#!/bin/sh\n")
-    os.chmod(consumer_dir / "out.sh", 0o644)
+    # Initial mode 0o600 (owner-only) so this test fixture stays under
+    # CodeQL's overly-permissive-mode rule. The test's invariant is
+    # mode-divergence detection — any initial mode that differs from
+    # the target's 0o755 manifest entry exercises the dry-run reporter.
+    os.chmod(consumer_dir / "out.sh", 0o600)
     _write_yaml(
         upstream_repo / "scripts" / "sync-targets.yml",
         {"targets": [{"source": "script.sh", "destination": "out.sh", "mode": "0755"}]},
@@ -762,7 +766,7 @@ def test_main_dry_run_reports_mode_only_diff(
     assert rc == 0
     out = capsys.readouterr().out
     assert "would write out.sh (mode)" in out
-    assert stat.S_IMODE((consumer_dir / "out.sh").stat().st_mode) == 0o644  # not actually changed
+    assert stat.S_IMODE((consumer_dir / "out.sh").stat().st_mode) == 0o600  # not actually changed
 
 
 def test_main_missing_source_file_returns_1(

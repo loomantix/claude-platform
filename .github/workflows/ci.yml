@@ -106,6 +106,24 @@ jobs:
           fi
           python3 .claude/lint-skill-content.py --base "$base"
 
+  claude-cli-invocations:
+    name: claude CLI invocation policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Self-test the lint patterns
+        run: python3 .claude/lint-claude-cli-invocations.py --self-test
+      - name: Lint synced shell scripts for `claude --` invocations
+        # Whole-tree scan (not diff-only) — the threat model is "current
+        # repo state ships malicious bytes to consumers," so we re-check
+        # every in-scope file on every push. Cheap (one file today,
+        # bounded growth) and resistant to attacks that try to split a
+        # weaponizing change across two PRs to escape diff-based gates.
+        run: python3 .claude/lint-claude-cli-invocations.py
+
   sync-targets:
     name: sync-targets.yml matches schema
     runs-on: ubuntu-latest

@@ -468,9 +468,33 @@ while [ $ITERATION -lt $MAX_ITERATIONS ]; do
     # would hide these and the loop would just see an empty FIFO.
     CLAUDE_ERR="$ITER_TMPDIR/claude.err"
 
-    claude --chrome --permission-mode bypassPermissions --verbose --print \
-        "Read @agent-loop-instructions.md and follow the instructions. Your assigned issue is #$CLAIMED_ID. Run 'gh issue view $CLAIMED_ID' to see the full description, then complete it." \
+    # claude-cli-invocations:start
+    # Locked region: the claude CLI invocation and its prompt fallback.
+    # Modifications must update .claude/claude-cli-invocations.allowlist
+    # (the CI lint rejects any unrecognized hash). Reviewer-visible by
+    # design — the synced shell script runs Claude with
+    # --permission-mode bypassPermissions, so a malicious literal change
+    # would weaponize every consumer's agent-loop runs.
+    PROMPT_FILE="$PROJECT_DIR/.claude/skills/agent-loop/prompt.txt"
+    if [ -f "$PROMPT_FILE" ]; then
+        # Consumer-owned prompt template, bootstrapped by the upstream
+        # sync engine with create_if_missing: true (one-shot). Edits
+        # made after bootstrap survive every subsequent sync.
+        PROMPT_TEMPLATE=$(cat "$PROMPT_FILE")
+    else
+        # Fallback for consumers that haven't synced yet (the upstream
+        # sync workflow bootstraps prompt.txt from
+        # .claude/skills/agent-loop/prompt.txt.template on first run).
+        PROMPT_TEMPLATE="Read @agent-loop-instructions.md and follow the instructions. Your assigned issue is #{ISSUE_ID}. Run 'gh issue view {ISSUE_ID}' to see the full description, then complete it."
+    fi
+    # CLAIMED_ID was validated as [0-9]+ when extracted from the issue
+    # queue (see pick_next_issue), so the substitution can't smuggle
+    # shell metacharacters into the prompt text.
+    PROMPT="${PROMPT_TEMPLATE//\{ISSUE_ID\}/$CLAIMED_ID}"
+
+    claude --chrome --permission-mode bypassPermissions --verbose --print "$PROMPT" \
         --output-format stream-json > "$FIFO" 2> "$CLAUDE_ERR" &
+    # claude-cli-invocations:end
     CLAUDE_PID=$!
 
     while read -r line; do

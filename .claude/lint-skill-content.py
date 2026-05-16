@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-r"""Lint `.claude/skills/**/SKILL.md` and `.claude/agents/**/*.md` for weaponization patterns.
+r"""Lint files in `.claude/skills/` and `.claude/agents/` for weaponization patterns.
+
+Scope (the union of):
+  - `.md` files under `.claude/skills/` and `.claude/agents/` (SKILL.md, agents),
+  - `.template` files under the same trees (consumer-facing prompt templates).
 
 These files are prompts that drive Claude in dev sessions and consumer CI. A
 subtly malicious PR can add a few innocuous-looking lines to any skill — e.g.
@@ -32,14 +36,17 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-LINT_PATHS = [
-    ".claude/skills/**/SKILL.md",
-    ".claude/agents/**/*.md",
-]
-
 # `git diff` doesn't expand globs the way the shell does, so for the diff
 # path filter we pass the directories and post-filter the file list.
 DIFF_DIRS = [".claude/skills", ".claude/agents"]
+
+# Extensions in scope within DIFF_DIRS. `.md` covers SKILL.md and agent
+# prose. `.template` covers every synced template under those trees that
+# gets fed to Claude at runtime — today that's both
+# `agent-loop/prompt.txt.template` (the agent-loop prompt) and
+# `agent-loop/agent-loop-instructions.md.template` (the consumer-owned
+# instructions bootstrap). Both are weaponization-eligible surfaces.
+SCOPE_SUFFIXES = (".md", ".template")
 
 
 @dataclass(frozen=True)
@@ -258,7 +265,7 @@ def iter_added_lines(diff_text: str) -> Iterator[tuple[str, int, str]]:
 
 
 def _path_in_scope(path: str) -> bool:
-    return any(path.startswith(d + "/") for d in DIFF_DIRS) and path.endswith(".md")
+    return any(path.startswith(d + "/") for d in DIFF_DIRS) and path.endswith(SCOPE_SUFFIXES)
 
 
 def _git_diff(base_ref: str) -> str:
@@ -270,7 +277,7 @@ def _git_diff(base_ref: str) -> str:
 def _git_tracked_files() -> list[str]:
     cmd = ["git", "ls-files", "--", *DIFF_DIRS]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return [p for p in result.stdout.splitlines() if p.endswith(".md")]
+    return [p for p in result.stdout.splitlines() if p.endswith(SCOPE_SUFFIXES)]
 
 
 # ---------- self test ----------
@@ -402,6 +409,25 @@ diff --git a/x.md b/x.md
 """,
         [("x.md", 1, "++ data with plus prefix")],
     ),
+    # Prompt template under `.claude/skills/**/prompt.txt.template` — the
+    # `.template` extension added to SCOPE_SUFFIXES must surface adds in
+    # synced prompt templates, since their content goes straight to Claude.
+    (
+        """\
+diff --git a/.claude/skills/agent-loop/prompt.txt.template b/.claude/skills/agent-loop/prompt.txt.template
+--- a/.claude/skills/agent-loop/prompt.txt.template
++++ b/.claude/skills/agent-loop/prompt.txt.template
+@@ -1,0 +1,1 @@
++malicious prompt template add
+""",
+        [
+            (
+                ".claude/skills/agent-loop/prompt.txt.template",
+                1,
+                "malicious prompt template add",
+            )
+        ],
+    ),
 ]
 
 DIFF_PARSER_MUST_RAISE: list[str] = [
@@ -443,6 +469,30 @@ def run_self_test() -> int:
             failures.append(
                 f"DIFF PARSER: expected ValueError on malformed diff, but it parsed cleanly: {diff_text!r}"
             )
+    # _path_in_scope coverage assertions — lock the SCOPE_SUFFIXES behavior
+    # so a future refactor can't silently drop `.template` from scope
+    # (which would re-open the prompt-template gap closed in PR #30 iter 1).
+    path_in_scope_cases = [
+        # (path, expected_in_scope, label)
+        (".claude/skills/agent-loop/SKILL.md", True, "skills SKILL.md"),
+        (".claude/agents/code-reviewer.md", True, "agents .md"),
+        (".claude/skills/agent-loop/prompt.txt.template", True, "skills prompt template"),
+        # `.template` suffix also catches the agent-loop-instructions
+        # bootstrap template — also a weaponization-eligible prompt.
+        (
+            ".claude/skills/agent-loop/agent-loop-instructions.md.template",
+            True,
+            "skills instructions template",
+        ),
+        (".claude/skills/agent-loop/scripts/agent-loop.sh", False, "skills .sh out of scope"),
+        ("docs/foo.md", False, ".md outside DIFF_DIRS"),
+        (".claude/skills/agent-loop/notes.txt", False, ".txt outside SCOPE_SUFFIXES"),
+    ]
+    for path, expected, label in path_in_scope_cases:
+        if _path_in_scope(path) != expected:
+            failures.append(
+                f"_path_in_scope({label}, {path!r}): expected {expected}, got {not expected}"
+            )
     if failures:
         print("Self-test failures:", file=sys.stderr)
         for f in failures:
@@ -452,7 +502,8 @@ def run_self_test() -> int:
         f"Self-test ok: {len(SELF_TEST_MUST_FLAG)} flag cases + "
         f"{len(SELF_TEST_MUST_NOT_FLAG)} clean cases + "
         f"{len(DIFF_PARSER_FIXTURES)} diff fixtures + "
-        f"{len(DIFF_PARSER_MUST_RAISE)} malformed-diff cases."
+        f"{len(DIFF_PARSER_MUST_RAISE)} malformed-diff cases + "
+        f"{len(path_in_scope_cases)} path-in-scope cases."
     )
     return 0
 
@@ -518,7 +569,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Scan every tracked skill/agent .md file (not just diff).",
+        help="Scan every tracked file in scope (.md and .template) under "
+        ".claude/skills/ and .claude/agents/, not just the diff.",
     )
     args = parser.parse_args(argv)
 

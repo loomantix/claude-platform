@@ -76,6 +76,14 @@ targets:
     substitutions: []
     create_if_missing: true
 
+  # Consumer-owned Claude prompt. `create_if_missing: true` bootstraps it
+  # once; later upstream edits to `prompt.txt.template` no longer reach
+  # already-onboarded consumers.
+  - source: .claude/skills/agent-loop/prompt.txt.template
+    destination: .claude/skills/agent-loop/prompt.txt
+    substitutions: []
+    create_if_missing: true
+
   # Custom Claude Code agents that the synced skills depend on. /feature-dev
   # invokes code-explorer, code-architect, and code-reviewer. Without these
   # in each consumer's .claude/agents/, those skills fail with "agent not found".

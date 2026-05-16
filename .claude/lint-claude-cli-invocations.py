@@ -29,10 +29,11 @@ from dataclasses import dataclass
 SCOPE_DIRS = [".claude/skills"]
 SCOPE_SUFFIX = ".sh"
 ALLOWLIST_PATH = ".claude/claude-cli-invocations.allowlist"
+SYNC_TARGETS_PATH = "scripts/sync-targets.yml"
 
 # Files that MUST be present in the scan set. Pins the gate's scope so an
-# attacker can't escape by moving agent-loop.sh outside SCOPE_DIRS while
-# keeping it synced via a fresh manifest entry.
+# attacker can't escape by removing agent-loop.sh from sync-targets.yml or
+# moving it outside SCOPE_DIRS while keeping it synced from a fresh entry.
 REQUIRED_FILES = [
     ".claude/skills/agent-loop/scripts/agent-loop.sh",
 ]
@@ -189,6 +190,43 @@ def _git_tracked_files() -> list[str]:
     return [p for p in result.stdout.splitlines() if p.endswith(SCOPE_SUFFIX)]
 
 
+def _synced_shell_sources() -> tuple[list[str], list[str]]:
+    """Read sync-targets.yml and return all .sh `source` paths + any errors.
+
+    The lint's primary mission is "no malicious bytes propagated to consumer
+    repos." sync-targets.yml is the authoritative list of files that get
+    synced; deriving scope from it future-proofs the gate against a synced
+    .sh file landing outside `.claude/skills/` (e.g. a future `.claude/hooks/`
+    or any other manifest target).
+    """
+    errors: list[str] = []
+    try:
+        import yaml
+    except ImportError:
+        errors.append(
+            f"pyyaml not installed — cannot read {SYNC_TARGETS_PATH}. "
+            "Install pyyaml or scope coverage will be limited to SCOPE_DIRS."
+        )
+        return [], errors
+    try:
+        with open(SYNC_TARGETS_PATH, encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh)
+    except FileNotFoundError:
+        errors.append(f"{SYNC_TARGETS_PATH} not found — cannot derive sync scope")
+        return [], errors
+    except yaml.YAMLError as exc:
+        errors.append(f"{SYNC_TARGETS_PATH}: {exc}")
+        return [], errors
+    sources: list[str] = []
+    for target in doc.get("targets", []) or []:
+        if not isinstance(target, dict):
+            continue
+        source = target.get("source", "")
+        if isinstance(source, str) and source.endswith(SCOPE_SUFFIX):
+            sources.append(source)
+    return sources, errors
+
+
 def _read_file_preserving_newlines(path: str) -> str:
     """Read a file without Python's universal-newline translation.
 
@@ -208,6 +246,7 @@ def scan(paths: list[str], allowlist_entries: list[AllowlistEntry]) -> int:
     # Defends against the region-copy attack (clone allowlisted block into a
     # new synced .sh file, evade the gate).
     allowed: set[tuple[str, str]] = {(e.sha256, e.path) for e in allowlist_entries}
+    observed: set[tuple[str, str]] = set()
     findings = 0
     for path in paths:
         try:
@@ -224,6 +263,7 @@ def scan(paths: list[str], allowlist_entries: list[AllowlistEntry]) -> int:
             findings += 1
         for region in regions:
             digest = hash_region(region)
+            observed.add((digest, path))
             if (digest, path) not in allowed:
                 print(
                     f"{path}:{region.start_line}: locked region hash not in allowlist for this path."
@@ -245,23 +285,47 @@ def scan(paths: list[str], allowlist_entries: list[AllowlistEntry]) -> int:
                     f"{ALLOWLIST_PATH}, or remove the token."
                 )
                 findings += 1
+    # Unused allowlist entries: prevents pre-seeding an opaque (hash, path)
+    # in one PR and adding the matching region in a follow-up PR without
+    # touching the allowlist (which would defeat the audit-trail invariant).
+    for sha, entry_path in sorted(allowed - observed):
+        print(
+            f"{ALLOWLIST_PATH}: unused allowlist entry {sha[:12]}… for {entry_path}"
+        )
+        print(
+            "    no locked region in scope hashes to this entry. "
+            "Remove the entry or add the matching region in this PR."
+        )
+        findings += 1
     return findings
 
 
 def compute_hashes(paths: list[str]) -> int:
-    """Print each region's hash for the given paths. Helper for allowlist rotation."""
-    any_found = False
+    """Print each region's hash for the given paths. Helper for allowlist rotation.
+
+    Surfaces region-parse errors to stderr and returns nonzero if any are
+    found, so a maintainer rotating the allowlist sees a malformed locked
+    region (orphan/nested/unclosed markers) before pasting hashes into the
+    allowlist and shipping a malformed gate.
+    """
+    any_regions = False
+    any_errors = False
     for path in paths:
         try:
             text = _read_file_preserving_newlines(path)
         except OSError as exc:
             print(f"unreadable: {path}: {exc}", file=sys.stderr)
             return 2
-        regions, _ = extract_regions(path, text)
+        regions, region_errors = extract_regions(path, text)
+        for err in region_errors:
+            any_errors = True
+            print(err, file=sys.stderr)
         for region in regions:
-            any_found = True
+            any_regions = True
             print(f"{hash_region(region)}  {path}  <description of the change>")
-    if not any_found:
+    if any_errors:
+        return 2
+    if not any_regions:
         print("(no locked regions found in the given paths)", file=sys.stderr)
         return 1
     return 0
@@ -373,6 +437,49 @@ CMD=claude
 $CMD --permission-mode bypassPermissions --print "$PROMPT"
 """
 
+# Widened-regex coverage — exercises every alternative trailing-context
+# branch that was added to `SENSITIVE_TOKEN_RE`. Each line MUST match so a
+# future regex narrowing can't silently re-open one of these bypass forms.
+_FIXTURE_SHORT_OPTION = """\
+#!/bin/bash
+claude -p "$EVIL"
+"""
+_FIXTURE_STDIN_REDIRECT = """\
+#!/bin/bash
+claude < prompt.txt
+"""
+_FIXTURE_HERE_STRING = """\
+#!/bin/bash
+claude <<< "$EVIL"
+"""
+_FIXTURE_POSITIONAL_VAR = """\
+#!/bin/bash
+claude "$EVIL"
+"""
+_FIXTURE_POSITIONAL_BARE_VAR = """\
+#!/bin/bash
+claude $EVIL
+"""
+_FIXTURE_PATH_QUALIFIED = """\
+#!/bin/bash
+/usr/local/bin/claude --print "$EVIL"
+"""
+
+# Negative fixtures — these MUST NOT match (false-positive avoidance for
+# the existing in-script references the widening had to step around).
+_FIXTURE_PATH_MENTION_IN_PRESENCE_CHECK = """\
+#!/bin/bash
+for cmd in gh jq python3 claude; do echo "$cmd"; done
+"""
+_FIXTURE_DOTPATH = """\
+#!/bin/bash
+echo "$PROJECT/.claude/skills/x"
+"""
+_FIXTURE_FILENAME_MENTION = """\
+#!/bin/bash
+CLAUDE_ERR="/tmp/claude.err"
+"""
+
 
 def run_self_test() -> int:
     failures: list[str] = []
@@ -444,6 +551,28 @@ def run_self_test() -> int:
     # would change and the test should be updated deliberately.
     inv = find_sensitive_token_lines("x.sh", _FIXTURE_BYPASS_FLAG_OUTSIDE)
     check("BYPASS TOKENS", len(inv) == 1, f"got {inv!r}")
+
+    # Every widened-regex case must produce exactly one match — locks in
+    # the iter-2 widening so a future narrowing reopens a documented bypass.
+    for label, fixture in [
+        ("SHORT OPTION (claude -p)", _FIXTURE_SHORT_OPTION),
+        ("STDIN REDIRECT (claude <)", _FIXTURE_STDIN_REDIRECT),
+        ("HERE STRING (claude <<<)", _FIXTURE_HERE_STRING),
+        ("POSITIONAL \"$VAR\"", _FIXTURE_POSITIONAL_VAR),
+        ("POSITIONAL $VAR", _FIXTURE_POSITIONAL_BARE_VAR),
+        ("PATH-QUALIFIED", _FIXTURE_PATH_QUALIFIED),
+    ]:
+        inv = find_sensitive_token_lines("x.sh", fixture)
+        check(f"REGEX/{label}", len(inv) == 1, f"got {inv!r}")
+    # Negative cases — these must NOT match (otherwise the lint false-flags
+    # benign references that exist in the current agent-loop.sh).
+    for label, fixture in [
+        ("PRESENCE-CHECK loop", _FIXTURE_PATH_MENTION_IN_PRESENCE_CHECK),
+        (".claude/ path mention", _FIXTURE_DOTPATH),
+        ("claude.err filename", _FIXTURE_FILENAME_MENTION),
+    ]:
+        inv = find_sensitive_token_lines("x.sh", fixture)
+        check(f"REGEX-NEG/{label}", inv == [], f"got {inv!r}")
 
     # --- end-to-end scan integration ---
     import contextlib
@@ -544,6 +673,37 @@ def run_self_test() -> int:
             "SCAN(bypass-flag) catches token outside marker",
             n >= 1 and "sensitive token" in out,
             f"got {n}; output:\n{out}",
+        )
+
+        # Unused allowlist entry → finding. Closes the iter-2 attack of
+        # pre-seeding an opaque (hash, path) in one PR and adding the
+        # matching region in a follow-up PR without re-touching the
+        # allowlist (which would defeat the audit-trail invariant).
+        empty_path = os.path.join(tmp, "no-regions.sh")
+        with open(empty_path, "w") as fh:
+            fh.write("#!/bin/bash\necho hello\n")
+        orphan_entry = AllowlistEntry(
+            sha256="a" * 64, path="some/synced.sh", description="pre-seeded"
+        )
+        n, out = scan_into([empty_path], [orphan_entry])
+        check(
+            "SCAN(unused-entry) flagged",
+            n >= 1 and "unused allowlist entry" in out,
+            f"got {n}; output:\n{out}",
+        )
+
+        # compute_hashes surfaces region-parse errors and returns nonzero.
+        bad_path = os.path.join(tmp, "malformed.sh")
+        with open(bad_path, "w") as fh:
+            fh.write(_FIXTURE_UNCLOSED_REGION)
+        sink_err = io.StringIO()
+        sink_out = io.StringIO()
+        with contextlib.redirect_stdout(sink_out), contextlib.redirect_stderr(sink_err):
+            ch_rc = compute_hashes([bad_path])
+        check(
+            "COMPUTE-HASH surfaces region errors",
+            ch_rc == 2 and "without matching end" in sink_err.getvalue(),
+            f"rc={ch_rc} stderr={sink_err.getvalue()!r}",
         )
 
         # CRLF on disk: write CRLF bytes through binary mode so Python's
@@ -673,15 +833,29 @@ def main(argv: list[str] | None = None) -> int:
         return compute_hashes(args.compute_hash)
 
     try:
-        paths = _git_tracked_files()
+        tracked = _git_tracked_files()
     except subprocess.CalledProcessError as exc:
         print(f"git ls-files failed: {exc.stderr}", file=sys.stderr)
         return 2
 
+    # Belt-and-braces scope: union of (a) tracked .sh files under SCOPE_DIRS
+    # — covers upstream-only files that a developer might still execute —
+    # and (b) all .sh `source` paths in sync-targets.yml — covers files
+    # outside SCOPE_DIRS that get propagated to consumers. (b) is the
+    # primary mission per the threat model; (a) catches the on-disk
+    # variant. If sync-targets.yml is unreadable / unparseable, fail loud
+    # rather than silently degrading to (a) only.
+    synced, sync_errors = _synced_shell_sources()
+    if sync_errors:
+        for err in sync_errors:
+            print(err, file=sys.stderr)
+        return 2
+    paths = sorted(set(tracked) | set(synced))
+
     # Scope-pin: REQUIRED_FILES must be in the scan set. Defends against
-    # an attacker moving the locked script out of SCOPE_DIRS while keeping
-    # it synced from a fresh manifest entry (lint would otherwise scan an
-    # empty file list and exit clean).
+    # an attacker moving the locked script out of SCOPE_DIRS *and* removing
+    # it from sync-targets.yml in the same PR (lint would otherwise scan
+    # an empty file list and exit clean).
     missing = [f for f in REQUIRED_FILES if f not in paths]
     if missing:
         print(

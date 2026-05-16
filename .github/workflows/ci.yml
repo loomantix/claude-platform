@@ -114,6 +114,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      # pyyaml is required by `_synced_shell_sources()` to derive scope
+      # from `scripts/sync-targets.yml`.
+      - run: python3 -m pip install 'pyyaml==6.0.2'
       - name: Self-test the lint patterns
         run: python3 .claude/lint-claude-cli-invocations.py --self-test
       # Whole-tree scan, not diff-based — resists splitting a weaponizing

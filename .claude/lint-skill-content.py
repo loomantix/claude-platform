@@ -411,6 +411,25 @@ diff --git a/x.md b/x.md
 """,
         [("x.md", 1, "++ data with plus prefix")],
     ),
+    # Prompt template under `.claude/skills/**/prompt.txt.template` — the
+    # `.template` extension added to SCOPE_SUFFIXES must surface adds in
+    # synced prompt templates, since their content goes straight to Claude.
+    (
+        """\
+diff --git a/.claude/skills/agent-loop/prompt.txt.template b/.claude/skills/agent-loop/prompt.txt.template
+--- a/.claude/skills/agent-loop/prompt.txt.template
++++ b/.claude/skills/agent-loop/prompt.txt.template
+@@ -1,0 +1,1 @@
++malicious prompt template add
+""",
+        [
+            (
+                ".claude/skills/agent-loop/prompt.txt.template",
+                1,
+                "malicious prompt template add",
+            )
+        ],
+    ),
 ]
 
 DIFF_PARSER_MUST_RAISE: list[str] = [
@@ -452,6 +471,23 @@ def run_self_test() -> int:
             failures.append(
                 f"DIFF PARSER: expected ValueError on malformed diff, but it parsed cleanly: {diff_text!r}"
             )
+    # _path_in_scope coverage assertions — lock the SCOPE_SUFFIXES behavior
+    # so a future refactor can't silently drop `.template` from scope
+    # (which would re-open the prompt-template gap closed in PR #30 iter 1).
+    path_in_scope_cases = [
+        # (path, expected_in_scope, label)
+        (".claude/skills/agent-loop/SKILL.md", True, "skills SKILL.md"),
+        (".claude/agents/code-reviewer.md", True, "agents .md"),
+        (".claude/skills/agent-loop/prompt.txt.template", True, "skills prompt template"),
+        (".claude/skills/agent-loop/scripts/agent-loop.sh", False, "skills .sh out of scope"),
+        ("docs/foo.md", False, ".md outside DIFF_DIRS"),
+        (".claude/skills/agent-loop/notes.txt", False, ".txt outside SCOPE_SUFFIXES"),
+    ]
+    for path, expected, label in path_in_scope_cases:
+        if _path_in_scope(path) != expected:
+            failures.append(
+                f"_path_in_scope({label}, {path!r}): expected {expected}, got {not expected}"
+            )
     if failures:
         print("Self-test failures:", file=sys.stderr)
         for f in failures:
@@ -461,7 +497,8 @@ def run_self_test() -> int:
         f"Self-test ok: {len(SELF_TEST_MUST_FLAG)} flag cases + "
         f"{len(SELF_TEST_MUST_NOT_FLAG)} clean cases + "
         f"{len(DIFF_PARSER_FIXTURES)} diff fixtures + "
-        f"{len(DIFF_PARSER_MUST_RAISE)} malformed-diff cases."
+        f"{len(DIFF_PARSER_MUST_RAISE)} malformed-diff cases + "
+        f"{len(path_in_scope_cases)} path-in-scope cases."
     )
     return 0
 

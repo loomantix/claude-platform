@@ -32,8 +32,9 @@ import os
 import re
 import stat
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Required, TypedDict
+from typing import Any, Final, Required, TypedDict
 
 try:
     import yaml
@@ -74,9 +75,102 @@ class ConsumerConfig(TypedDict, total=False):
 
     substitutions: dict[str, str]
     skip_targets: list[str]
+    allowed_destinations: list[str]
 
 
 PLACEHOLDER_RE = re.compile(r"<<([A-Z][A-Z0-9_]*)>>")
+
+
+def glob_to_regex(pattern: str) -> re.Pattern[str]:
+    """Compile a gitignore-flavored glob pattern to an anchored regex.
+
+    Cases handled:
+        `**/`  (start or mid-pattern) → zero or more leading/intermediate
+               path segments. So `**/foo.md` matches `foo.md`, `a/foo.md`,
+               and `a/b/c/foo.md`; `a/**/b` matches `a/b` and `a/x/y/b`.
+        trailing `**` → matches the rest of the path (any characters,
+               including `/`). So `.claude/skills/**` matches
+               `.claude/skills/grill/SKILL.md` but NOT `.claude/skills`
+               itself (the trailing `/` in the pattern is required).
+        bare `**` without an adjacent `/` → treated as `.*` (any-chars).
+        `*` → any run of characters except `/`.
+        `?` → a single character except `/`.
+
+    Everything else is escaped as literal — regex metachars like `.` and
+    `+` are not honored. The returned pattern is anchored at both ends —
+    partial matches do not count. Used by both the consumer-side
+    `allowed_destinations` allowlist and the engine-level
+    `SENSITIVE_DELETE_PATTERNS` constant.
+    """
+    parts: list[str] = []
+    i = 0
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "*" and i + 1 < len(pattern) and pattern[i + 1] == "*":
+            # `**/` — zero or more leading path segments (or none at all).
+            # Without the trailing `/`, treat `**` as "match the rest of
+            # the path including any separators."
+            if i + 2 < len(pattern) and pattern[i + 2] == "/":
+                parts.append("(?:.*/)?")
+                i += 3
+            else:
+                parts.append(".*")
+                i += 2
+        elif c == "*":
+            parts.append("[^/]*")
+            i += 1
+        elif c == "?":
+            parts.append("[^/]")
+            i += 1
+        else:
+            parts.append(re.escape(c))
+            i += 1
+    return re.compile(r"\A" + "".join(parts) + r"\Z")
+
+
+def path_matches_any(path: str, compiled_patterns: Sequence[re.Pattern[str]]) -> bool:
+    """Return True if `path` matches any of the pre-compiled glob patterns."""
+    return any(p.match(path) is not None for p in compiled_patterns)
+
+
+# Paths the engine refuses to `delete:` from a consumer tree, regardless of
+# whether they appear in the consumer's `allowed_destinations` list. A
+# compromised upstream-authored manifest entry could otherwise enumerate
+# every CI workflow under `.github/workflows/**` for deletion, leaving the
+# consumer with no CI gate before the next sync lands. The refusal applies
+# to delete entries only — these paths are still legitimate copy targets
+# (a consumer may want their workflows synced from upstream).
+#
+# Extension criterion: include a path here when its *absence* would weaken
+# a runtime, build, or review invariant more than wrong content would —
+# wrong content tends to fail loudly at the next CI run; absence is silent.
+# That's why workflows + composite actions + CODEOWNERS + lockfiles + schema
+# + Dockerfile are in; tsconfig.json (loud compile failure) is not.
+SENSITIVE_DELETE_PATTERNS: Final[tuple[str, ...]] = (
+    ".github/workflows/**",
+    ".github/actions/**",
+    ".github/CODEOWNERS",
+    "package.json",
+    "pnpm-lock.yaml",
+    "prisma/schema.prisma",
+    "Dockerfile",
+    "Dockerfile.*",
+)
+def _compile_case_insensitive(pattern: str) -> re.Pattern[str]:
+    """Recompile a glob pattern with `re.IGNORECASE`.
+
+    Sensitive paths must be blocked even on case-insensitive filesystems
+    (macOS APFS, NTFS) where `dockerfile` resolves to the same on-disk
+    file as `Dockerfile`. Fleet sync runs on `ubuntu-latest` (case-
+    sensitive ext4), so this is defense-in-depth for self-hosted or
+    macos-/windows-latest runners.
+    """
+    return re.compile(glob_to_regex(pattern).pattern, re.IGNORECASE)
+
+
+SENSITIVE_DELETE_REGEXES: Final[tuple[re.Pattern[str], ...]] = tuple(
+    _compile_case_insensitive(p) for p in SENSITIVE_DELETE_PATTERNS
+)
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -266,6 +360,45 @@ def main() -> int:
         sys.stderr.write(f"{config_path}: `substitutions` must be a mapping\n")
         return 1
 
+    # Consumer-side allowlist: shifts the trust boundary from "upstream
+    # maintainer didn't get fooled" to "consumer explicitly opted in to
+    # each destination path." Tri-state:
+    #   absent key       → fail-open warn (migration mode; will flip to
+    #                      fail-closed once all consumers ship allowlists)
+    #   `allowed_destinations:` with no value → config error (almost certainly
+    #                      a mid-edit accident; an empty list is the explicit
+    #                      "deny everything" knob, written `[]`)
+    #   non-empty list   → every write/delete must match at least one pattern
+    #   `[]`             → deny everything (the "lock this consumer" knob)
+    allowed_patterns: list[re.Pattern[str]] | None  # None = migration fail-open
+    if "allowed_destinations" not in config_doc:
+        # GitHub Actions annotation surfaces this in the PR UI instead of
+        # being buried in a green-checkmark build's stderr.
+        sys.stderr.write(
+            f"::warning file={config_path}::`allowed_destinations` not set. "
+            f"Upstream sync-targets are currently trusted to write anywhere "
+            f"in the consumer tree. Add an `allowed_destinations:` list to "
+            f"enforce the gate before the engine flips fail-closed.\n"
+        )
+        allowed_patterns = None
+    else:
+        allowed_raw = config_doc["allowed_destinations"]
+        if allowed_raw is None:
+            sys.stderr.write(
+                f"{config_path}: `allowed_destinations:` is present but null. "
+                f"Use `[]` to deny everything, or remove the key to opt into "
+                f"phase-1 fail-open behavior.\n"
+            )
+            return 1
+        if not isinstance(allowed_raw, list) or not all(
+            isinstance(p, str) for p in allowed_raw
+        ):
+            sys.stderr.write(
+                f"{config_path}: `allowed_destinations` must be a list of strings\n"
+            )
+            return 1
+        allowed_patterns = [glob_to_regex(p) for p in allowed_raw]
+
     print(f"Syncing from {upstream_repo} → {consumer_dir}")
     if args.dry_run:
         print("(dry run — no files will be written)")
@@ -319,19 +452,32 @@ def main() -> int:
         # clean error rather than a downstream TypeError or write-the-cwd
         # surprise. `mode` only validates here for non-delete targets —
         # `parse_mode` raises on bad input, and a `mode` field on a
-        # delete target is meaningless.
+        # delete target is meaningless. Control characters are rejected
+        # outright: `[^/]*` in the glob compiler matches newlines, so an
+        # allowlist pattern like `.claude/skills/*` would otherwise accept
+        # `.claude/skills/foo\nbar` as a valid destination. The on-disk
+        # write would succeed; downstream tooling that ingests sync diffs
+        # would see a weirdly-named file that human review could miss.
         if dest_rel is not None and (
-            not isinstance(dest_rel, str) or not dest_rel or dest_rel in (".", "..")
+            not isinstance(dest_rel, str)
+            or not dest_rel
+            or dest_rel in (".", "..")
+            or not dest_rel.isprintable()
         ):
             sys.stderr.write(
-                f"  ❌ `destination` must be a non-empty path string, got {dest_rel!r}: {target!r}\n"
+                f"  ❌ `destination` must be a non-empty printable path string, "
+                f"got {dest_rel!r}: {target!r}\n"
             )
             return 1
         if source_rel is not None and (
-            not isinstance(source_rel, str) or not source_rel or source_rel in (".", "..")
+            not isinstance(source_rel, str)
+            or not source_rel
+            or source_rel in (".", "..")
+            or not source_rel.isprintable()
         ):
             sys.stderr.write(
-                f"  ❌ `source` must be a non-empty path string, got {source_rel!r}: {target!r}\n"
+                f"  ❌ `source` must be a non-empty printable path string, "
+                f"got {source_rel!r}: {target!r}\n"
             )
             return 1
 
@@ -375,7 +521,52 @@ def main() -> int:
             sys.stderr.write(f"  ❌ destination escapes consumer root: {dest_rel}\n")
             return 1
 
+        # Canonicalize for policy matching. `resolve_under` collapses `./`,
+        # `//`, and `foo/../` segments via `os.path.normpath`, so the on-disk
+        # write target is `dest_path` — but the allowlist and
+        # `SENSITIVE_DELETE_REGEXES` match by string against the manifest's
+        # `destination` field. Without normalization, a manifest entry like
+        # `./.github/workflows/release.yml` resolves to the guarded file on
+        # disk while bypassing the anchored `.github/workflows/**` pattern.
+        # Reject non-canonical strings outright: every fleet manifest entry
+        # uses canonical posix-relative paths, so a mismatch is either a
+        # typo (clean error beats silent rewrite) or an attack attempt.
+        dest_rel_canonical = dest_path.relative_to(consumer_dir).as_posix()
+        if dest_rel_canonical != dest_rel:
+            sys.stderr.write(
+                f"  ❌ destination must be in canonical posix form (no `./`, "
+                f"`//`, or `..` segments): got {dest_rel!r}, normalized form "
+                f"is {dest_rel_canonical!r}\n"
+            )
+            return 1
+
+        # Consumer-side allowlist enforcement. Applies uniformly to copy,
+        # delete, and create_if_missing targets — the threat model is
+        # "upstream manifest can write/delete consumer files" and all three
+        # actions touch the destination.
+        if allowed_patterns is not None and not path_matches_any(
+            dest_rel_canonical, allowed_patterns
+        ):
+            sys.stderr.write(
+                f"  ❌ destination not in consumer's `allowed_destinations`: "
+                f"{dest_rel_canonical}\n"
+            )
+            return 1
+
         if delete_flag:
+            # Engine-level refusal for paths whose deletion would remove
+            # consumer-side guardrails (CI workflows, composite actions,
+            # CODEOWNERS, lockfiles, schema, container build). Applies
+            # regardless of allowlist — a consumer that legitimately syncs
+            # CI workflows still must not have those workflows deletable
+            # by manifest entry.
+            if path_matches_any(dest_rel_canonical, SENSITIVE_DELETE_REGEXES):
+                sys.stderr.write(
+                    f"  ❌ refusing to delete sensitive path (engine-level "
+                    f"block, applies regardless of allowed_destinations): "
+                    f"{dest_rel_canonical}\n"
+                )
+                return 1
             # Refuse to unlink a real directory at the destination —
             # `unlink()` would raise `IsADirectoryError` and abort the
             # whole sync. Symlinks-to-directories are still removable

@@ -1,12 +1,14 @@
-"""Shared fixtures + a sys.path shim that lets the test modules import
-the hyphenated script files (`sync-engine.py`, `create-signed-commit.py`)
-as Python modules without renaming them on disk.
+"""Shared fixtures + an `importlib` loader that lets the test modules
+import the hyphenated script files (`sync-engine.py`,
+`create-signed-commit.py`) as Python modules without renaming them on
+disk.
 
 The scripts are designed to be run from CI as `python3 scripts/foo.py`,
 so they don't need to be importable from the source tree. The tests use
 `importlib.util.spec_from_file_location` via `_load_script` below to
-load them as pseudo-modules — cleaner than spawning subprocesses for
-every function-level unit test.
+load them as pseudo-modules under the bare names `sync_engine` and
+`create_signed_commit` — cleaner than spawning subprocesses for every
+function-level unit test.
 """
 from __future__ import annotations
 

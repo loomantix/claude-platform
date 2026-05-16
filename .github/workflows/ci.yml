@@ -57,14 +57,19 @@ jobs:
           git config --global init.defaultBranch main
       - name: Run pytest + write coverage data
         run: python3 -m pytest tests/ --cov --cov-report=term-missing -ra
-      # Per-file gate matches the spec ("≥80% coverage on
-      # scripts/sync-engine.py + scripts/create-signed-commit.py") so a
-      # future refactor that spikes one file's coverage can't paper over
-      # a regression in the other.
+      # Per-file gate matches the security contract: a future refactor
+      # that spikes one file's coverage can't paper over a regression
+      # in the other. The `test -f` precondition is load-bearing —
+      # `coverage report --include=<missing>` exits 0 with "No data to
+      # report", silently passing the gate if a file gets renamed.
       - name: Coverage gate — sync-engine.py >=80%
-        run: python3 -m coverage report --include='scripts/sync-engine.py' --fail-under=80
+        run: |
+          test -f scripts/sync-engine.py
+          python3 -m coverage report --include='scripts/sync-engine.py' --fail-under=80
       - name: Coverage gate — create-signed-commit.py >=80%
-        run: python3 -m coverage report --include='scripts/create-signed-commit.py' --fail-under=80
+        run: |
+          test -f scripts/create-signed-commit.py
+          python3 -m coverage report --include='scripts/create-signed-commit.py' --fail-under=80
 
   shell:
     name: Shell syntax + shellcheck

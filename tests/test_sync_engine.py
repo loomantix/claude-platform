@@ -101,6 +101,21 @@ def test_parse_mode_rejects_non_octal_string(sync_engine: ModuleType) -> None:
         sync_engine.parse_mode("9999")  # 9 isn't a valid octal digit
 
 
+def test_parse_mode_rejects_negative_int(sync_engine: ModuleType) -> None:
+    # `Path.chmod(-1)` raises OverflowError mid-loop, partially syncing the
+    # consumer tree. Reject at the parse boundary so the sync fails before
+    # any write happens.
+    with pytest.raises(ValueError, match="out of range"):
+        sync_engine.parse_mode(-1)
+
+
+def test_parse_mode_rejects_oversized_int(sync_engine: ModuleType) -> None:
+    # Values above 0o7777 are not valid POSIX file modes; reject rather
+    # than silently truncate.
+    with pytest.raises(ValueError, match="out of range"):
+        sync_engine.parse_mode(0o10000)
+
+
 # ---------------------------------------------------------------------------
 # substitute — placeholder warnings + missing-required failure
 # ---------------------------------------------------------------------------
@@ -567,6 +582,30 @@ def test_main_skip_targets_by_source(
     assert rc == 0
     assert not (consumer_dir / "dest.md").exists()
     assert "skip" in capsys.readouterr().out
+
+
+def test_main_skip_delete_target_by_destination(
+    sync_engine: ModuleType,
+    upstream_repo: Path,
+    consumer_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A consumer that wants to OPT OUT of a retirement (keep the
+    # upstream-flagged-for-deletion file) puts the destination into
+    # `skip_targets`. The file must stay on disk and `skipped` counts up.
+    (consumer_dir / "kept.md").write_text("consumer wants to keep this\n")
+    _write_yaml(
+        upstream_repo / "scripts" / "sync-targets.yml",
+        {"targets": [{"destination": "kept.md", "delete": True}]},
+    )
+    _write_yaml(consumer_dir / ".platform-config.yml", {"skip_targets": ["kept.md"]})
+
+    rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
+    assert rc == 0
+    assert (consumer_dir / "kept.md").read_text() == "consumer wants to keep this\n"
+    out = capsys.readouterr().out
+    assert "skip kept.md" in out
 
 
 def test_main_create_if_missing_bootstraps_first_time(

@@ -211,10 +211,17 @@ def parse_mode(value: object) -> int | None:
         # typed `true` / `false` doesn't become `mode: 1` / `mode: 0`.
         raise TypeError(f"mode must be int or str, got bool: {value!r}")
     if isinstance(value, int):
-        return value
-    if not isinstance(value, str):
+        mode_int = value
+    elif isinstance(value, str):
+        mode_int = int(value, 8)
+    else:
         raise TypeError(f"mode must be int, str, or None; got {type(value).__name__}")
-    return int(value, 8)
+    if not 0 <= mode_int <= 0o7777:
+        # Negative or >12-bit values pass `int(_, 8)` but break `Path.chmod`
+        # mid-loop with `OverflowError`, half-syncing the consumer tree.
+        # Fail-closed before any write happens.
+        raise ValueError(f"mode out of range [0, 0o7777]: {value!r}")
+    return mode_int
 
 
 def parse_args() -> argparse.Namespace:
@@ -425,9 +432,12 @@ def main() -> int:
         # Same path-bound check on `source` as `destination` — a manifest
         # typo with `..` segments would otherwise read arbitrary files
         # from the runner filesystem rather than from the upstream repo.
-        # `source_rel` is guaranteed non-empty str here by the malformed-
-        # entry check above (delete_flag is False past the unlink branch).
-        assert source_rel is not None
+        # Explicit guard (not `assert`) so this still narrows under
+        # `python -O` — the malformed-entry check above also rejects None
+        # for copy targets, so this branch is defense-in-depth.
+        if source_rel is None:
+            sys.stderr.write(f"  ❌ unreachable: copy target missing source: {target!r}\n")
+            return 1
         source_path = resolve_under(upstream_repo, source_rel)
         if source_path is None:
             sys.stderr.write(f"  ❌ source escapes upstream repo: {source_rel}\n")

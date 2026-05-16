@@ -16,10 +16,28 @@ from __future__ import annotations
 
 import os
 import subprocess
+import urllib.error
 from pathlib import Path
 from types import ModuleType
 
 import pytest
+
+
+def _http_error(path: str, code: int, msg: str) -> urllib.error.HTTPError:
+    """Build a synthetic GitHub-API HTTPError for tests.
+
+    `hdrs=None` is documented-accepted at runtime but typed as
+    `email.message.Message` (not `Message | None`) in typeshed —
+    a stdlib stub gap. Scoping the `type: ignore` to this builder keeps
+    the four call sites clean.
+    """
+    return urllib.error.HTTPError(
+        url="https://api.github.com" + path,
+        code=code,
+        msg=msg,
+        hdrs=None,  # type: ignore[arg-type]
+        fp=None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +167,36 @@ def test_parse_status_mixed_upsert_and_delete(
     changes = create_signed_commit.parse_status(git_repo)
     assert "new.txt" in changes.upserts
     assert "seed.txt" in changes.deletes
+
+
+def test_parse_status_d_entry_trusts_git_code_not_disk_state(
+    create_signed_commit: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression lock for the inverted-classification bug fixed upstream:
+    a `D` entry must be classified as a delete based on the git status
+    code alone, NOT by re-checking `.exists()` on disk. The old code
+    introduced a TOCTOU window where a concurrent re-create of the path
+    between `git status` and the disk check caused the delete to be
+    misclassified as an upsert — re-uploading the file to the tree
+    instead of removing it.
+
+    The cleanest test of the contract is to mock `run` so we control
+    exactly what porcelain output the parser sees, and assert that even
+    when the file exists on disk, a `D` code routes to deletes.
+    """
+    # Real-disk state: the file IS present (the TOCTOU we're guarding
+    # against — git said delete, but disk says present).
+    (tmp_path / "ghost.txt").write_text("oops still here\n")
+
+    # Mock `run` so the parser sees a synthetic `D` entry regardless of
+    # disk state. NUL-separated porcelain v1 with -z.
+    def fake_run(*args: str, cwd: Path | None = None) -> str:
+        return "D  ghost.txt\0"
+
+    monkeypatch.setattr(create_signed_commit, "run", fake_run)
+    changes = create_signed_commit.parse_status(tmp_path)
+    assert changes.deletes == ["ghost.txt"]
+    assert changes.upserts == []
 
 
 # ---------------------------------------------------------------------------
@@ -295,16 +343,8 @@ def test_github_api_optional_returns_none_on_404(
     create_signed_commit: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import urllib.error
-
     def fake_request(method: str, path: str, token: str, body: object) -> object:
-        raise urllib.error.HTTPError(
-            url="https://api.github.com" + path,
-            code=404,
-            msg="Not Found",
-            hdrs=None,  # type: ignore[arg-type]
-            fp=None,
-        )
+        raise _http_error(path, 404, "Not Found")
 
     monkeypatch.setattr(create_signed_commit, "_github_request", fake_request)
     result = create_signed_commit.github_api_optional("GET", "/test", "tok")
@@ -316,16 +356,8 @@ def test_github_api_optional_exits_on_other_errors(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import urllib.error
-
     def fake_request(method: str, path: str, token: str, body: object) -> object:
-        raise urllib.error.HTTPError(
-            url="https://api.github.com" + path,
-            code=500,
-            msg="Internal Server Error",
-            hdrs=None,  # type: ignore[arg-type]
-            fp=None,
-        )
+        raise _http_error(path, 500, "Internal Server Error")
 
     monkeypatch.setattr(create_signed_commit, "_github_request", fake_request)
     with pytest.raises(SystemExit) as exc:
@@ -340,16 +372,8 @@ def test_github_api_exits_on_http_error(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import urllib.error
-
     def fake_request(method: str, path: str, token: str, body: object) -> object:
-        raise urllib.error.HTTPError(
-            url="https://api.github.com" + path,
-            code=422,
-            msg="Unprocessable Entity",
-            hdrs=None,  # type: ignore[arg-type]
-            fp=None,
-        )
+        raise _http_error(path, 422, "Unprocessable Entity")
 
     monkeypatch.setattr(create_signed_commit, "_github_request", fake_request)
     with pytest.raises(SystemExit) as exc:
@@ -401,8 +425,13 @@ class _ApiRecorder:
         if not self._responses:
             raise AssertionError(f"unexpected API call: {method} {path}")
         exp_method, exp_prefix, value = self._responses.pop(0)
-        assert method == exp_method, f"expected {exp_method} {exp_prefix}, got {method} {path}"
-        assert path.startswith(exp_prefix), f"expected path prefix {exp_prefix}, got {path}"
+        # Explicit `raise` (not `assert`) so mismatches still surface under
+        # `python -O` / `PYTHONOPTIMIZE=1`. Bare asserts would silently
+        # pass mismatched calls, turning the contract test into a no-op.
+        if method != exp_method:
+            raise AssertionError(f"expected {exp_method} {exp_prefix}, got {method} {path}")
+        if not path.startswith(exp_prefix):
+            raise AssertionError(f"expected path prefix {exp_prefix}, got {path}")
         if isinstance(value, Exception):
             raise value
         return value
@@ -457,11 +486,8 @@ def test_main_full_flow_creates_new_branch_when_absent(
     """End-to-end: with one upsert + one delete in the working tree, main()
     must walk the 5-step API sequence (ref → commit → tree → blobs → ref).
     """
-    # Stage: rename seed.txt → renamed.txt + add a new file.
     _git("mv", "seed.txt", "renamed.txt", cwd=git_repo)
     (git_repo / "new.txt").write_text("brand new\n")
-
-    import urllib.error
 
     recorder = _ApiRecorder([
         # 1. base-branch ref
@@ -480,11 +506,7 @@ def test_main_full_flow_creates_new_branch_when_absent(
         ("POST", "/repos/loomantix/test/git/commits", {"sha": "new-commit-sha"}),
         # 7. check if new branch exists — 404 = absent
         ("GET", "/repos/loomantix/test/git/ref/heads/sync/upstream-2026-05-16",
-         urllib.error.HTTPError(
-             url="https://api.github.com/test", code=404, msg="Not Found",
-             hdrs=None,  # type: ignore[arg-type]
-             fp=None,
-         )),
+         _http_error("/repos/loomantix/test/git/ref/heads/sync/upstream-2026-05-16", 404, "Not Found")),
         # 8. POST new ref
         ("POST", "/repos/loomantix/test/git/refs", {"ref": "refs/heads/x"}),
     ])

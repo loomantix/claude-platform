@@ -3,16 +3,20 @@ name: CodeQL
 # Sync engine + create-signed-commit run with cross-org org-scoped App
 # tokens in the consumer fleet. CodeQL's default Python query suite
 # catches taint flows that ruff and mypy don't — explicit defense
-# against a logic-bomb landing here (red-team report sections 1.2 + 11.3).
+# against a logic-bomb landing in this repo while consumers pull from
+# it daily.
 
 on:
+  push:
+    # Push-event scan on main establishes the baseline that GitHub Code
+    # Scanning needs to auto-dismiss fixed alerts. Without it, resolved
+    # findings linger as stale entries in the Security tab.
+    branches: [main]
   pull_request:
     branches: [main]
   schedule:
     # Weekly scan so a query-suite improvement at upstream catches
-    # latent vulnerabilities even if no PR touched the file. Push-to-main
-    # is intentionally omitted — branch protection means every main
-    # commit arrives via a PR that already ran this analysis.
+    # latent vulnerabilities even if no PR touched the file.
     - cron: '17 9 * * 1'
 
 permissions:

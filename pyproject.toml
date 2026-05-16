@@ -14,12 +14,12 @@ addopts = [
 ]
 filterwarnings = [
     # Treat warnings raised inside our own code as errors so a future
-    # DeprecationWarning from `urllib`/`pathlib`/etc. surfaces loudly.
-    # Stdlib- and third-party-internal warnings stay informational so a
-    # transient pytest/setuptools deprecation can't break CI on a green
-    # PR.
-    "error:::scripts.*",
-    "error:::tests.*",
+    # DeprecationWarning surfaces loudly. The scripts are loaded by
+    # `tests/conftest.py` via `spec_from_file_location` under the bare
+    # module names below (the hyphenated source filenames aren't valid
+    # Python identifiers, so `scripts.*` would never match). Stdlib /
+    # third-party warnings stay informational so a transient external
+    # deprecation can't break CI on a green PR.
     "error:::sync_engine",
     "error:::create_signed_commit",
 ]
@@ -49,8 +49,9 @@ exclude_lines = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
-# Tests import the scripts via a sys.path shim in conftest.py — mypy needs
-# the same view of the import surface to type-check them in place.
+# Tests import the scripts via `importlib.util.spec_from_file_location`
+# in conftest.py — mypy needs the same view of the source tree to
+# type-check the script bodies in place.
 mypy_path = ["scripts", ".claude"]
 files = [
     "scripts",

@@ -51,6 +51,29 @@ The full DCO text is at https://developercertificate.org/. By signing off, you a
 - Keep SKILL.md content **operational** — what to do, in what order, with what guard rails. Avoid historical "why this was added" narrative; that belongs in the PR description and rots quickly.
 - Prefer adjusting an existing skill over forking it. Three skills with overlapping scope is a maintenance tax on every consumer.
 
+## Skill content policy
+
+SKILL.md (and agent prompt files under `.claude/agents/`) are executable in effect: Claude reads them, follows them, and frequently runs the shell commands they describe under auto-approval or (via `agent-loop`) `--permission-mode bypassPermissions`. A line added to a skill is therefore code that runs on every developer's machine and inside consumer CI.
+
+The following patterns are **forbidden** in `.claude/skills/**/SKILL.md` and `.claude/agents/**/*.md`. The lint at `.claude/lint-skill-content.py` enforces these on every PR (changed lines only) and is wired into the `skill-content` CI job:
+
+- **Fetch-and-execute**: `curl … | sh`, `eval "$(curl …)"`, `source <(wget …)`, `base64 -d … | bash`, and equivalents in any interpreter.
+- **Reverse shells and raw network redirects**: `/dev/tcp/`, `/dev/udp/`, `nc -e`, `bash -i >& …`.
+- **Credential reads**: any reference to `~/.aws/`, `$HOME/.aws/`, `/home/<user>/.aws/`, `/root/.aws/`, `/Users/<user>/.aws/` (and the equivalent `.ssh`, `.gnupg`, `.netrc`, `.config/{gh,gcloud,kubectl}` forms), `/etc/shadow`, `id_rsa` / `id_ed25519` / `id_ecdsa` / `id_dsa`, and the canonical AWS credential env vars (`AWS_SECRET_ACCESS_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SESSION_TOKEN`, plus the legacy `AWS_SECRET_KEY` / `AWS_ACCESS_KEY`).
+- **Environment exfiltration**: `printenv | curl …`, `env > /dev/tcp/…`, equivalents.
+- **Raw `curl` / `wget` / `nc` / `socat` / `telnet`**: use `gh` for GitHub operations. Genuine exceptions need to be justified in PR review.
+- **Off-allowlist URLs**: the lint allowlists github.com, anthropic.com, claude.com, loomantix.com, npmjs.com, and a small set of standards/docs hosts. URL hostnames are parsed via `urllib.parse.urlsplit` (so a userinfo trick like `https://github.com@attacker.io/x` resolves to `attacker.io` and is rejected). New allowlist entries require review.
+- **Defanged URLs**: `hxxps://…` and URL-encoded forms like `https%3A%2F%2F…`. Claude reading a SKILL.md may interpret these as "manually visit" instructions even though they aren't valid links.
+
+If your contribution legitimately needs one of these patterns, raise it in the PR — the reviewer can update the lint allowlist deliberately. Don't disable the check, and don't reorganize patterns to evade it.
+
+Run the lint locally before pushing:
+
+```bash
+python3 .claude/lint-skill-content.py --self-test    # verify patterns
+python3 .claude/lint-skill-content.py                # diff vs origin/main
+```
+
 ## Sync-mechanism rules
 
 - Changes to `scripts/sync-engine.py` or `scripts/create-signed-commit.py` are **sync-propagating** — they ship to every consumer on the next `sync-v1` retag. Treat these as the highest-stakes files in the repo. Add tests where the existing surface lacks them; review extra carefully for path-traversal, token-exfil, or unintended-write paths.

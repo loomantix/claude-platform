@@ -52,9 +52,9 @@ END_MARKER = "# claude-cli-invocations:end"
 # which is what every real call in this repo looks like.
 CLAUDE_INVOCATION_RE = re.compile(r"(?<![\w/.-])claude\s+--")
 
-# In comments and quoted strings, references to the literal `claude --` are
-# fine — they're documentation, not execution. Detect those contexts so the
-# bare-invocation check doesn't false-flag them.
+# Comment-only lines are skipped by the bare-invocation check — they're
+# documentation, not execution. (Quoted-string mentions of `claude --` are
+# not skipped; see find_claude_invocations.)
 COMMENT_LINE_RE = re.compile(r"^\s*#")
 
 
@@ -69,7 +69,6 @@ class Region:
 @dataclass(frozen=True)
 class AllowlistEntry:
     sha256: str
-    location: str  # "<path>:<start_line>"
     description: str
 
 
@@ -87,7 +86,6 @@ def extract_regions(path: str, text: str) -> tuple[list[Region], list[str]]:
     errors: list[str] = []
     lines = text.splitlines(keepends=True)
     start_line: int | None = None
-    body_start: int | None = None
     for idx, raw in enumerate(lines, start=1):
         stripped = raw.strip()
         if stripped == START_MARKER:
@@ -98,18 +96,18 @@ def extract_regions(path: str, text: str) -> tuple[list[Region], list[str]]:
                 )
                 continue
             start_line = idx
-            body_start = idx  # body starts AFTER this line (index idx in 1-based ⇒ slice[idx:])
         elif stripped == END_MARKER:
             if start_line is None:
                 errors.append(f"{path}:{idx}: {END_MARKER!r} without matching start")
                 continue
-            assert body_start is not None
-            content = "".join(lines[body_start:idx - 1])
+            # Body is the slice between start and end markers (exclusive on
+            # both ends). 1-indexed lineno → 0-indexed list slice: lines
+            # `start_line+1..idx-1` map to `lines[start_line:idx-1]`.
+            content = "".join(lines[start_line:idx - 1])
             regions.append(
                 Region(path=path, start_line=start_line, end_line=idx, content=content)
             )
             start_line = None
-            body_start = None
     if start_line is not None:
         errors.append(
             f"{path}:{start_line}: {START_MARKER!r} without matching end"
@@ -123,48 +121,20 @@ def extract_regions(path: str, text: str) -> tuple[list[Region], list[str]]:
 def find_claude_invocations(path: str, text: str) -> list[tuple[int, str]]:
     """Return (lineno, line) for every line that contains a `claude --` call.
 
-    Excludes comment-only lines and quoted-string contexts (a heuristic via
-    surrounding quotes on the same line) so that doc references don't
-    false-flag. The caller cross-checks each invocation against the
-    marker regions and the allowlist.
+    Comment-only lines are skipped (they're documentation, not execution).
+    Quoted-string contexts (`echo "claude --print ..."`) are NOT skipped:
+    a fully accurate bash quote tracker is subtle and the marker-region
+    check is the source of truth anyway. If a synced shell script ever
+    needs to mention `claude --` inside a quoted string, the right move
+    is to move that mention to a comment line or wrap it in the markers.
     """
     found: list[tuple[int, str]] = []
     for idx, raw in enumerate(text.splitlines(), start=1):
         if COMMENT_LINE_RE.match(raw):
             continue
-        for match in CLAUDE_INVOCATION_RE.finditer(raw):
-            pos = match.start()
-            if _is_inside_string_literal(raw, pos):
-                continue
+        if CLAUDE_INVOCATION_RE.search(raw):
             found.append((idx, raw))
-            break  # one report per line is enough
     return found
-
-
-def _is_inside_string_literal(line: str, pos: int) -> bool:
-    """Crude single-line check for whether `pos` sits inside `"..."` or `'...'`.
-
-    Bash strings can span lines, but the lint's bare-invocation rule only
-    cares about lines that themselves invoke `claude --` — a multi-line
-    string that happens to contain the literal `claude --` won't read like
-    an invocation to the shell parser. Counting unescaped quotes before
-    `pos` is sufficient for the common single-line case (docstrings,
-    echo "...", etc.).
-    """
-    in_single = False
-    in_double = False
-    i = 0
-    while i < pos:
-        ch = line[i]
-        if ch == "\\" and i + 1 < len(line) and not in_single:
-            i += 2
-            continue
-        if ch == "'" and not in_double:
-            in_single = not in_single
-        elif ch == '"' and not in_single:
-            in_double = not in_double
-        i += 1
-    return in_single or in_double
 
 
 # ---------- allowlist ----------
@@ -177,23 +147,15 @@ def parse_allowlist(text: str) -> tuple[list[AllowlistEntry], list[str]]:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        parts = line.split(None, 2)
-        if len(parts) < 2:
-            errors.append(
-                f"{ALLOWLIST_PATH}:{lineno}: expected `<sha256>  <path>:<start_line>  <description>`, got: {line!r}"
-            )
+        parts = line.split(None, 1)
+        if not parts:
             continue
-        sha, location = parts[0], parts[1]
-        description = parts[2] if len(parts) == 3 else ""
+        sha = parts[0]
+        description = parts[1] if len(parts) == 2 else ""
         if not re.fullmatch(r"[0-9a-f]{64}", sha):
             errors.append(f"{ALLOWLIST_PATH}:{lineno}: not a sha256: {sha!r}")
             continue
-        if ":" not in location:
-            errors.append(
-                f"{ALLOWLIST_PATH}:{lineno}: location must be `<path>:<line>`, got: {location!r}"
-            )
-            continue
-        entries.append(AllowlistEntry(sha256=sha, location=location, description=description))
+        entries.append(AllowlistEntry(sha256=sha, description=description))
     return entries, errors
 
 
@@ -236,7 +198,7 @@ def scan(paths: list[str], allowlist_entries: list[AllowlistEntry]) -> int:
                 print(
                     f"{path}:{region.start_line}: locked region hash not in allowlist."
                 )
-                print(f"    expected entry: {digest}  {path}:{region.start_line}  <description>")
+                print(f"    expected entry: {digest}  <description of the change>")
                 print(
                     f"    add the entry to {ALLOWLIST_PATH} in this PR — the diff is the audit trail."
                 )
@@ -295,12 +257,6 @@ claude --print "$PROMPT"
 # claude-cli-invocations:end
 """
 
-# Doc reference inside a single-line double-quoted string — not an invocation.
-_FIXTURE_DOC_REFERENCE = """\
-#!/bin/bash
-echo "Spawn claude --print to run."
-"""
-
 # Comment-only line referencing claude — also not an invocation.
 _FIXTURE_COMMENT_REFERENCE = """\
 #!/bin/bash
@@ -353,9 +309,6 @@ def run_self_test() -> int:
     inv = find_claude_invocations("x.sh", _FIXTURE_BARE_INVOCATION)
     if len(inv) != 1:
         failures.append(f"BARE: expected 1 invocation, got {inv!r}")
-    inv = find_claude_invocations("x.sh", _FIXTURE_DOC_REFERENCE)
-    if inv:
-        failures.append(f"DOC REFERENCE: expected 0 invocations (string-literal), got {inv!r}")
     inv = find_claude_invocations("x.sh", _FIXTURE_COMMENT_REFERENCE)
     if len(inv) != 1:
         failures.append(f"COMMENT REFERENCE: expected 1 invocation (comment skipped, real one kept), got {inv!r}")
@@ -383,7 +336,7 @@ def run_self_test() -> int:
             fh.write(_FIXTURE_OK)
         regions, _ = extract_regions(ok_path, _FIXTURE_OK)
         digest = hash_region(regions[0])
-        entry = AllowlistEntry(sha256=digest, location=f"{ok_path}:3", description="test")
+        entry = AllowlistEntry(sha256=digest, description="test")
         sink = io.StringIO()
         with contextlib.redirect_stdout(sink):
             ok_findings = scan([ok_path], [entry])
@@ -398,9 +351,9 @@ def run_self_test() -> int:
     # repetition, so we use explicit `+` to keep the fixture readable.
     allowlist_fixture = (
         "# header comment\n"
-        + ("0" * 64) + "  path/to/file.sh:42  description here\n"
+        + ("0" * 64) + "  description here\n"
         + "\n"
-        + "abc  bad-line\n"
+        + "abc-not-sha256\n"
     )
     entries, errors = parse_allowlist(allowlist_fixture)
     if len(entries) != 1:

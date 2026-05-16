@@ -8,12 +8,8 @@
 # audit trail for the reviewer.
 #
 # Format (whitespace-separated):
-#   <sha256>  <path>:<start_line>  <description>
+#   <sha256>  <description>
 #
-# The line-number field is informational (it tracks the start-marker
-# line as of the last edit, so the reviewer can locate the region
-# quickly) and is NOT checked by the lint — only the hash is. That
-# means whitespace/comment edits *outside* the region don't churn the
-# allowlist even if they shift the region's line number.
+# The description is informational; only the hash is checked.
 
-7e11c4ed3459e678fb187a61c60a43f48d94283a740c699cb3cc7fb40a016b5c  .claude/skills/agent-loop/scripts/agent-loop.sh:471  agent-loop: spawn claude with bypassPermissions + consumer-owned prompt
+0d44727f8dab1f2a1cac4d8b81867ca970210d72b78cd57f754287c8e1ff7c0d  agent-loop.sh: spawn claude with bypassPermissions + consumer-owned prompt

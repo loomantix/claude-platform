@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 r"""Lint `claude` CLI invocations inside synced shell scripts.
 
+Scope (the scan set is the union of):
+  - every `.sh` file tracked under `.claude/skills/` (SCOPE_DIRS), AND
+  - every `.sh` `source:` entry in `scripts/sync-targets.yml`.
+
 Every `claude` invocation (or use of `--permission-mode` / `bypassPermissions`)
-in `.claude/skills/**/scripts/*.sh` must sit inside a
-`# claude-cli-invocations:start` / `:end` marker pair, and the bytes between
-those markers must hash to an entry in `.claude/claude-cli-invocations.allowlist`.
-Any change to the locked region — flags, fallback literal, surrounding glue —
+inside that scope must sit inside a `# claude-cli-invocations:start` / `:end`
+marker pair, and the bytes between those markers must hash to a
+`(sha256, path)` entry in `.claude/claude-cli-invocations.allowlist`. Any
+change to a locked region — flags, fallback literal, surrounding glue —
 breaks the hash and fails CI, forcing the edit to be reviewer-visible.
 
 Usage:
@@ -132,21 +136,60 @@ def extract_regions(path: str, text: str) -> tuple[list[Region], list[str]]:
     return regions, errors
 
 
+def _join_continuations(text: str) -> list[tuple[int, str]]:
+    """Return (first-lineno, logical-line) pairs with `\\`-continuations joined.
+
+    Bash splits a command across lines with a trailing backslash. A line-based
+    scan would see `claude \\` (no token-followed-by-flag) on line 1 and
+    `"$PROMPT"` (no `claude`) on line 2, missing the joined invocation. The
+    returned lineno is the FIRST physical line of the joined command, so
+    findings still point at the `claude` token's actual location in the file.
+
+    Trailing-backslash detection uses `endswith("\\\\")` after stripping
+    trailing whitespace — handles `claude \\` followed by a trailing space
+    that bash would otherwise reject. Escaped-trailing-backslash (`\\\\\\\\`)
+    is treated as a literal backslash, not a continuation.
+    """
+    out: list[tuple[int, str]] = []
+    buffer: list[str] = []
+    buffer_start: int | None = None
+    for idx, raw in enumerate(text.splitlines(), start=1):
+        stripped_right = raw.rstrip()
+        is_continuation = (
+            stripped_right.endswith("\\") and not stripped_right.endswith("\\\\")
+        )
+        if buffer_start is None:
+            buffer_start = idx
+        if is_continuation:
+            buffer.append(stripped_right[:-1])
+            continue
+        buffer.append(raw)
+        out.append((buffer_start, " ".join(s.strip() for s in buffer)))
+        buffer = []
+        buffer_start = None
+    if buffer and buffer_start is not None:
+        out.append((buffer_start, " ".join(s.strip() for s in buffer)))
+    return out
+
+
 def find_sensitive_token_lines(path: str, text: str) -> list[tuple[int, str]]:
     """Return (lineno, line) for every non-comment line containing a sensitive token.
 
-    Comment-only lines (matching `^\\s*#`) are skipped — they're documentation.
-    Everything else is in scope, including quoted-string mentions: if a synced
-    shell script ever needs to refer to `claude --print` in an `echo`, the
-    right move is a comment line or wrapping in markers, not a quote-state
-    machine we'd have to keep correct against bash's full grammar.
+    Comment-only lines are skipped — they're documentation, not execution.
+    Backslash-continuation lines are joined before scanning, so a split
+    invocation like `claude \\` + `"$PROMPT"` is caught as one logical
+    command (the lineno reported is the first physical line of the join).
+    Quoted-string mentions remain in scope: if a synced shell script ever
+    needs to refer to `claude --print` in an `echo`, the right move is a
+    comment line or wrapping in markers, not a quote-state machine we'd
+    have to keep correct against bash's full grammar.
     """
     found: list[tuple[int, str]] = []
-    for idx, raw in enumerate(text.splitlines(), start=1):
-        if COMMENT_LINE_RE.match(raw):
+    for lineno, line in _join_continuations(text):
+        if COMMENT_LINE_RE.match(line):
             continue
-        if SENSITIVE_TOKEN_RE.search(raw):
-            found.append((idx, raw))
+        if SENSITIVE_TOKEN_RE.search(line):
+            found.append((lineno, line))
     return found
 
 
@@ -199,13 +242,14 @@ def _synced_shell_sources() -> tuple[list[str], list[str]]:
     .sh file landing outside `.claude/skills/` (e.g. a future `.claude/hooks/`
     or any other manifest target).
     """
+    import os
+
     errors: list[str] = []
     try:
         import yaml
     except ImportError:
         errors.append(
-            f"pyyaml not installed — cannot read {SYNC_TARGETS_PATH}. "
-            "Install pyyaml or scope coverage will be limited to SCOPE_DIRS."
+            f"pyyaml not installed — required to derive scope from {SYNC_TARGETS_PATH}."
         )
         return [], errors
     try:
@@ -217,13 +261,24 @@ def _synced_shell_sources() -> tuple[list[str], list[str]]:
     except yaml.YAMLError as exc:
         errors.append(f"{SYNC_TARGETS_PATH}: {exc}")
         return [], errors
+    # yaml.safe_load("") returns None; a top-level list or scalar isn't a
+    # mapping either. Guard before .get(...) so the lint surfaces the
+    # malformed-manifest case instead of crashing with AttributeError.
+    if not isinstance(doc, dict):
+        errors.append(
+            f"{SYNC_TARGETS_PATH}: expected top-level mapping, got {type(doc).__name__}"
+        )
+        return [], errors
     sources: list[str] = []
     for target in doc.get("targets", []) or []:
         if not isinstance(target, dict):
             continue
         source = target.get("source", "")
         if isinstance(source, str) and source.endswith(SCOPE_SUFFIX):
-            sources.append(source)
+            # Normalize so `./foo`, `foo/`, `foo//bar`, etc., all map to the
+            # same canonical form as `git ls-files`'s output — keeps the
+            # union-with-tracked-files dedup honest.
+            sources.append(os.path.normpath(source))
     return sources, errors
 
 
@@ -261,8 +316,26 @@ def scan(paths: list[str], allowlist_entries: list[AllowlistEntry]) -> int:
         for err in region_errors:
             print(err)
             findings += 1
+        # Per-file duplicate detection: one allowlist entry approves one
+        # locked region. If a file contains two regions with the same hash,
+        # an attacker has cloned the approved block within the same file
+        # to double up `bypassPermissions` invocations without rotating the
+        # allowlist. Flag every duplicate occurrence beyond the first.
+        seen_hashes_this_file: dict[str, int] = {}
         for region in regions:
             digest = hash_region(region)
+            seen_hashes_this_file[digest] = seen_hashes_this_file.get(digest, 0) + 1
+            if seen_hashes_this_file[digest] > 1:
+                print(
+                    f"{path}:{region.start_line}: duplicate locked region "
+                    f"(hash {digest[:12]}… already appears earlier in this file)."
+                )
+                print(
+                    "    Each region must be unique within a file — the allowlist "
+                    "approves one occurrence, not arbitrarily many."
+                )
+                findings += 1
+                continue  # don't double-count via the allowlist gate
             observed.add((digest, path))
             if (digest, path) not in allowed:
                 print(
@@ -479,6 +552,33 @@ _FIXTURE_FILENAME_MENTION = """\
 #!/bin/bash
 CLAUDE_ERR="/tmp/claude.err"
 """
+_FIXTURE_URL_MENTION = """\
+#!/bin/bash
+echo "See https://claude.com/docs for help."
+"""
+
+# Continuation-line evasion — `claude \\` on one line, `"$PROMPT"` on the
+# next. The line-based scan would miss this; `_join_continuations` joins
+# them before regex matching so the invocation surfaces.
+_FIXTURE_CONTINUATION_INVOCATION = """\
+#!/bin/bash
+claude \\
+    "$PROMPT"
+"""
+
+# Duplicate region within the same file — the allowlist approves one
+# region, not arbitrarily many. The per-file duplicate detector must flag
+# the second occurrence.
+_FIXTURE_DUPLICATE_REGION = """\
+#!/bin/bash
+# claude-cli-invocations:start
+claude --print "$PROMPT"
+# claude-cli-invocations:end
+echo middle
+# claude-cli-invocations:start
+claude --print "$PROMPT"
+# claude-cli-invocations:end
+"""
 
 
 def run_self_test() -> int:
@@ -570,9 +670,19 @@ def run_self_test() -> int:
         ("PRESENCE-CHECK loop", _FIXTURE_PATH_MENTION_IN_PRESENCE_CHECK),
         (".claude/ path mention", _FIXTURE_DOTPATH),
         ("claude.err filename", _FIXTURE_FILENAME_MENTION),
+        ("claude.com URL", _FIXTURE_URL_MENTION),
     ]:
         inv = find_sensitive_token_lines("x.sh", fixture)
         check(f"REGEX-NEG/{label}", inv == [], f"got {inv!r}")
+
+    # Continuation-line join: `claude \` + `"$PROMPT"` must surface as one
+    # finding, lineno pointing at the line where `claude` lives.
+    inv = find_sensitive_token_lines("x.sh", _FIXTURE_CONTINUATION_INVOCATION)
+    check(
+        "CONTINUATION joined into one logical line",
+        len(inv) == 1 and inv[0][0] == 2,
+        f"got {inv!r}",
+    )
 
     # --- end-to-end scan integration ---
     import contextlib
@@ -706,6 +816,23 @@ def run_self_test() -> int:
             f"rc={ch_rc} stderr={sink_err.getvalue()!r}",
         )
 
+        # Duplicate region within the same file → finding on the second
+        # occurrence. The allowlist approves ONE region, not two with the
+        # same bytes — a clone introduces another bypassPermissions call.
+        dup_path = os.path.join(tmp, "dup-region.sh")
+        with open(dup_path, "w") as fh:
+            fh.write(_FIXTURE_DUPLICATE_REGION)
+        dup_regions, _ = extract_regions(dup_path, _FIXTURE_DUPLICATE_REGION)
+        dup_entry = AllowlistEntry(
+            sha256=hash_region(dup_regions[0]), path=dup_path, description="test"
+        )
+        n, out = scan_into([dup_path], [dup_entry])
+        check(
+            "SCAN(duplicate-region) flagged within same file",
+            n >= 1 and "duplicate locked region" in out,
+            f"got {n}; output:\n{out}",
+        )
+
         # CRLF on disk: write CRLF bytes through binary mode so Python's
         # text-mode universal-newline translation can't normalize them
         # before the lint sees them. The lint MUST read with newline=""
@@ -782,6 +909,98 @@ def run_self_test() -> int:
         not entries and any("expected" in e for e in errors),
         f"entries={entries!r} errors={errors!r}",
     )
+
+    # --- _synced_shell_sources via temporary manifest files ---
+    # Cover the manifest parser end-to-end: a synced .sh outside SCOPE_DIRS
+    # surfaces, non-.sh sources are filtered out, malformed YAML and
+    # missing manifests produce clear errors. Runs in a tempdir-as-cwd so
+    # the test never touches the real `scripts/sync-targets.yml`.
+    import os
+
+    test_cases: list[tuple[str, str, list[str], bool]] = [
+        # (label, manifest_yaml, expected_sources, expect_errors)
+        (
+            "synced .sh outside SCOPE_DIRS surfaces",
+            "targets:\n"
+            "  - source: .claude/hooks/foo.sh\n"
+            "    destination: .claude/hooks/foo.sh\n"
+            "  - source: .claude/skills/x/SKILL.md\n"
+            "    destination: .claude/skills/x/SKILL.md\n",
+            [".claude/hooks/foo.sh"],
+            False,
+        ),
+        (
+            "non-.sh sources filtered out",
+            "targets:\n"
+            "  - source: .claude/agents/code-reviewer.md\n"
+            "    destination: .claude/agents/code-reviewer.md\n",
+            [],
+            False,
+        ),
+        (
+            "empty manifest is an error, not a crash",
+            "",
+            [],
+            True,
+        ),
+        (
+            "non-mapping top-level YAML is an error, not a crash",
+            "- not-a-mapping\n",
+            [],
+            True,
+        ),
+        (
+            "malformed YAML reports parse error",
+            "targets:\n  - this is: bad\n      yaml: '\n",
+            [],
+            True,
+        ),
+        (
+            "path normalization: `./foo/bar.sh` matches `foo/bar.sh`",
+            "targets:\n  - source: ./.claude/skills/x.sh\n    destination: ./.claude/skills/x.sh\n",
+            [".claude/skills/x.sh"],
+            False,
+        ),
+    ]
+    original_path = SYNC_TARGETS_PATH
+    for label, yaml_text, expected_sources, expect_errors in test_cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd_was = os.getcwd()
+            try:
+                os.chdir(tmp)
+                manifest_dir = os.path.join(tmp, "scripts")
+                os.makedirs(manifest_dir, exist_ok=True)
+                with open(os.path.join(manifest_dir, "sync-targets.yml"), "w") as fh:
+                    fh.write(yaml_text)
+                sources, errors = _synced_shell_sources()
+            finally:
+                os.chdir(cwd_was)
+        if expect_errors:
+            check(
+                f"SYNCED/{label} reports errors",
+                bool(errors),
+                f"got sources={sources!r} errors={errors!r}",
+            )
+        else:
+            check(
+                f"SYNCED/{label}",
+                sources == expected_sources and not errors,
+                f"got sources={sources!r} errors={errors!r}",
+            )
+    # Missing manifest → error.
+    with tempfile.TemporaryDirectory() as tmp:
+        cwd_was = os.getcwd()
+        try:
+            os.chdir(tmp)
+            sources, errors = _synced_shell_sources()
+        finally:
+            os.chdir(cwd_was)
+        check(
+            "SYNCED/missing manifest reports error",
+            sources == [] and any("not found" in e for e in errors),
+            f"got sources={sources!r} errors={errors!r}",
+        )
+    _ = original_path  # silence unused-name lint
 
     # --- dataclass invariant enforcement ---
     try:

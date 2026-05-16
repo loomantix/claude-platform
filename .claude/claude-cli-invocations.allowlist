@@ -10,4 +10,4 @@
 # copying an allowlisted region into a new synced .sh file does NOT
 # inherit the approval; the reviewer has to add a separate entry.
 
-9b5f79f1c43203a9df1ef67a038b9f5d2dd3146757bb4253d1632306a4ccaf12  .claude/skills/agent-loop/scripts/agent-loop.sh  agent-loop.sh: spawn claude with bypassPermissions + consumer-owned prompt
+53d15c3ae0db8e302b3290ab7d08c8172aff9199f68da710f09296f8674cf08e  .claude/skills/agent-loop/scripts/agent-loop.sh  agent-loop.sh: spawn claude with bypassPermissions + consumer-owned prompt (with {ISSUE_ID} placeholder guard)

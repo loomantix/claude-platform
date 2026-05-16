@@ -479,6 +479,14 @@ while [ $ITERATION -lt $MAX_ITERATIONS ]; do
         echo -e "${RED}✗${NC} prompt template empty after read — aborting iteration"
         exit 1
     fi
+    # The substitution silently no-ops if `{ISSUE_ID}` is absent, which
+    # would launch Claude with an issue-less prompt — the inner Claude
+    # would then either work the wrong task or stall asking what to do.
+    if [[ "$PROMPT_TEMPLATE" != *"{ISSUE_ID}"* ]]; then
+        echo -e "${RED}✗${NC} prompt template missing {ISSUE_ID} placeholder: $PROMPT_FILE"
+        echo "    Restore the placeholder or delete the file to use the upstream default."
+        exit 1
+    fi
     # Explicit guard, not a comment claim — pick_next_issue's number-from-jq
     # path is always digits today, but a future refactor could change that.
     if ! [[ "$CLAIMED_ID" =~ ^[0-9]+$ ]]; then

@@ -25,9 +25,9 @@ Defaults: 10 iterations, auto-generated collection branch (`agent-loop-<timestam
 
 ## Prerequisites (per-repo, one-time)
 
-1. **`agent-loop-instructions.md` at the repo root** — repo-specific agent instructions (codebase conventions, build commands, test invocation, deployment quirks). The Claude prompt is fixed: `Read @agent-loop-instructions.md and follow the instructions. Your assigned issue is #N. Run 'gh issue view N' to see the full description, then complete it.` If the file is missing, the script exits before claiming work.
+1. **`agent-loop-instructions.md` at the repo root** — repo-specific agent instructions (codebase conventions, build commands, test invocation, deployment quirks). The Claude prompt that points Claude here is **consumer-owned** in `.claude/skills/agent-loop/prompt.txt`, bootstrapped from `prompt.txt.template` on first sync (`create_if_missing: true`). The default content — `Read @agent-loop-instructions.md and follow the instructions. Your assigned issue is #{ISSUE_ID}. Run 'gh issue view {ISSUE_ID}' to see the full description, then complete it.` — is the value the script falls back to when `prompt.txt` is absent, empty, or unreadable. Edit `prompt.txt` to customize what Claude is told before reading your instructions file. If `agent-loop-instructions.md` itself is missing, the script exits before claiming work.
 
-   The sync engine bootstraps this file from an upstream-only template (`agent-loop-instructions.md.template`) on first sync — the manifest entry uses `create_if_missing: true`. After first creation, customize the file for your repo; subsequent syncs leave it alone.
+   Both files are bootstrapped via `create_if_missing: true` (their respective templates live in `.claude/skills/agent-loop/`). After first creation, customize them for your repo; subsequent syncs leave them alone.
 
 2. **`dev: agent` label + a triaged backlog** in the consumer's GitHub repo. The script picks **only** issues carrying `dev: agent` — without the label, an issue is invisible to the loop. This is a positive filter, not an exclusion: the operator must walk the backlog once and tag the agent-shaped subset, which keeps the loop from wandering into design / cross-repo / device-gated work. Create the label once per repo, then triage:
 

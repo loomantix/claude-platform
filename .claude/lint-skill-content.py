@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-r"""Lint `.claude/skills/**/SKILL.md` and `.claude/agents/**/*.md` for weaponization patterns.
+r"""Lint files in `.claude/skills/` and `.claude/agents/` for weaponization patterns.
+
+Scope (the union of):
+  - `.md` files under `.claude/skills/` and `.claude/agents/` (SKILL.md, agents),
+  - `.template` files under the same trees (consumer-facing prompt templates).
 
 These files are prompts that drive Claude in dev sessions and consumer CI. A
 subtly malicious PR can add a few innocuous-looking lines to any skill — e.g.
@@ -32,22 +36,16 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-LINT_PATHS = [
-    ".claude/skills/**/SKILL.md",
-    ".claude/agents/**/*.md",
-    # Prompt templates synced to consumers are also fed straight to Claude
-    # at runtime — same threat surface as SKILL.md content. Currently:
-    # `.claude/skills/agent-loop/prompt.txt.template`.
-    ".claude/skills/**/prompt.txt.template",
-]
-
 # `git diff` doesn't expand globs the way the shell does, so for the diff
 # path filter we pass the directories and post-filter the file list.
 DIFF_DIRS = [".claude/skills", ".claude/agents"]
 
-# Extensions to scan within DIFF_DIRS. `.md` for SKILL/agent prose,
-# `.template` for prompt templates synced to consumers (.txt.template
-# files end in `.template`).
+# Extensions in scope within DIFF_DIRS. `.md` covers SKILL.md and agent
+# prose. `.template` covers every synced template under those trees that
+# gets fed to Claude at runtime — today that's both
+# `agent-loop/prompt.txt.template` (the agent-loop prompt) and
+# `agent-loop/agent-loop-instructions.md.template` (the consumer-owned
+# instructions bootstrap). Both are weaponization-eligible surfaces.
 SCOPE_SUFFIXES = (".md", ".template")
 
 
@@ -479,6 +477,13 @@ def run_self_test() -> int:
         (".claude/skills/agent-loop/SKILL.md", True, "skills SKILL.md"),
         (".claude/agents/code-reviewer.md", True, "agents .md"),
         (".claude/skills/agent-loop/prompt.txt.template", True, "skills prompt template"),
+        # `.template` suffix also catches the agent-loop-instructions
+        # bootstrap template — also a weaponization-eligible prompt.
+        (
+            ".claude/skills/agent-loop/agent-loop-instructions.md.template",
+            True,
+            "skills instructions template",
+        ),
         (".claude/skills/agent-loop/scripts/agent-loop.sh", False, "skills .sh out of scope"),
         ("docs/foo.md", False, ".md outside DIFF_DIRS"),
         (".claude/skills/agent-loop/notes.txt", False, ".txt outside SCOPE_SUFFIXES"),

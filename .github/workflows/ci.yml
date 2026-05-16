@@ -79,6 +79,33 @@ jobs:
       - name: Prettier --check
         run: npx --yes prettier@3.8.3 --check .
 
+  skill-content:
+    name: Skill content policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Self-test the lint patterns
+        run: python3 .claude/lint-skill-content.py --self-test
+      - name: Lint changed skill/agent content
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            if [ -z "${GITHUB_BASE_REF:-}" ]; then
+              echo "GITHUB_BASE_REF empty for pull_request event — aborting." >&2
+              exit 1
+            fi
+            git fetch --no-tags origin "${GITHUB_BASE_REF}"
+            base="origin/${GITHUB_BASE_REF}"
+          else
+            base="HEAD~1"
+          fi
+          python3 .claude/lint-skill-content.py --base "$base"
+
   sync-targets:
     name: sync-targets.yml matches schema
     runs-on: ubuntu-latest

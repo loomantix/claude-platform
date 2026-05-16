@@ -209,6 +209,24 @@ def test_derive_signoff_trailer_uses_bot_suffix(create_signed_commit: ModuleType
     assert out == "Signed-off-by: loomantix[bot] <loomantix[bot]@users.noreply.github.com>"
 
 
+def test_derive_signoff_trailer_empty_slug_documents_current_behavior(
+    create_signed_commit: ModuleType,
+) -> None:
+    """Pinning current behavior: an empty `--app-slug` produces a
+    `[bot] <[bot]@users.noreply.github.com>` trailer. The DCO regex
+    accepts it (`.+ <.+@.+>`) but it's an obvious misconfiguration.
+    The argparse default is `None` (no trailer); empty-string is only
+    reachable from a misconfigured workflow input.
+
+    Recording the behavior as-is rather than tightening the validator
+    here — the upstream `actions/create-github-app-token` output is
+    never empty in practice, so this is a contract-pinning test
+    rather than a hardening one.
+    """
+    out = create_signed_commit.derive_signoff_trailer("")
+    assert out == "Signed-off-by: [bot] <[bot]@users.noreply.github.com>"
+
+
 def test_with_signoff_appends_when_absent(create_signed_commit: ModuleType) -> None:
     trailer = "Signed-off-by: bot[bot] <bot[bot]@users.noreply.github.com>"
     out = create_signed_commit.with_signoff("feat: do thing", trailer)

@@ -224,6 +224,25 @@ def test_write_if_changed_applies_mode_when_diverged(
     assert stat.S_IMODE(target.stat().st_mode) == 0o755
 
 
+def test_write_if_changed_compares_full_12bit_mode(
+    sync_engine: ModuleType, tmp_path: Path
+) -> None:
+    """Regression lock: `parse_mode` accepts the full POSIX 12-bit range
+    (setuid + setgid + sticky + rwx*3 = up to `0o7777`). The mode
+    comparison in `write_if_changed` must use `stat.S_IMODE` (12-bit),
+    NOT `& 0o777` (9-bit) — otherwise a file with mode `0o4755`
+    (setuid + rwxr-xr-x) compared against current `0o755` would always
+    appear out-of-sync and the engine would re-chmod on every run.
+    """
+    target = tmp_path / "setuid.sh"
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o4755)  # setuid + rwxr-xr-x
+    # Content identical, mode matches at the FULL 12-bit level → no change.
+    changed = sync_engine.write_if_changed(target, "#!/bin/sh\n", 0o4755)
+    assert changed is False
+    assert stat.S_IMODE(target.stat().st_mode) == 0o4755
+
+
 def test_write_if_changed_leaves_mode_when_none(sync_engine: ModuleType, tmp_path: Path) -> None:
     target = tmp_path / "out.txt"
     target.write_text("hello")

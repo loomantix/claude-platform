@@ -1,8 +1,6 @@
-[project]
-name = "claude-platform"
-version = "0.0.0"
-description = "Upstream source for Claude Code skills + sync engine. Not published; this file exists only to configure local tooling (pytest, mypy, coverage, ruff)."
-requires-python = ">=3.12"
+# This file configures local tooling only (pytest, mypy, coverage,
+# ruff) — the repo is not pip-installable, so there's no `[project]`
+# table. PEP 518 lets `[tool.*]` sections stand alone.
 
 [tool.pytest.ini_options]
 minversion = "8.0"

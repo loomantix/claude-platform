@@ -103,7 +103,7 @@ def _github_request(
             f"GitHub API {method} {path}: expected JSON object, got {type(parsed).__name__}\n"
         )
         sys.exit(1)
-    return cast("dict[str, Any]", parsed)
+    return cast(dict[str, Any], parsed)
 
 
 def _exit_on_http_error(method: str, path: str, e: urllib.error.HTTPError) -> None:

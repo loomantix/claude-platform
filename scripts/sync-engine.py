@@ -30,6 +30,7 @@ import argparse
 import errno
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Required, TypedDict
@@ -141,7 +142,12 @@ def write_if_changed(path: Path, content: str, mode: int | None) -> bool:
     if changed:
         path.write_text(content, encoding="utf-8")
     if mode is not None:
-        current = path.stat().st_mode & 0o777
+        # `stat.S_IMODE` keeps the full 12-bit permission set (setuid +
+        # setgid + sticky + rwx*3). `& 0o777` would mask off the upper
+        # 3 bits, so a manifest entry like `mode: 0o4755` would never
+        # match the current mode and the file would be re-chmod'd on
+        # every sync run.
+        current = stat.S_IMODE(path.stat().st_mode)
         if current != mode:
             path.chmod(mode)
             changed = True
@@ -313,9 +319,7 @@ def main() -> int:
         # clean error rather than a downstream TypeError or write-the-cwd
         # surprise. `mode` only validates here for non-delete targets —
         # `parse_mode` raises on bad input, and a `mode` field on a
-        # delete target is meaningless. isinstance checks here also narrow
-        # `source_rel` / `dest_rel` from `Any | None` to `str | None` for
-        # the rest of the loop.
+        # delete target is meaningless.
         if dest_rel is not None and (
             not isinstance(dest_rel, str) or not dest_rel or dest_rel in (".", "..")
         ):
@@ -436,7 +440,10 @@ def main() -> int:
         # `python -O` — the malformed-entry check above also rejects None
         # for copy targets, so this branch is defense-in-depth.
         if source_rel is None:
-            sys.stderr.write(f"  ❌ unreachable: copy target missing source: {target!r}\n")
+            sys.stderr.write(
+                f"  ❌ internal invariant violated: copy target reached "
+                f"source-resolve with `source` unset: {target!r}\n"
+            )
             return 1
         source_path = resolve_under(upstream_repo, source_rel)
         if source_path is None:
@@ -456,7 +463,7 @@ def main() -> int:
 
         if args.dry_run:
             existing = dest_path.read_text(encoding="utf-8") if dest_path.is_file() else None
-            current_mode = (dest_path.stat().st_mode & 0o777) if dest_path.is_file() else None
+            current_mode = stat.S_IMODE(dest_path.stat().st_mode) if dest_path.is_file() else None
             content_diverged = existing != substituted
             mode_diverged = mode is not None and current_mode is not None and current_mode != mode
             if content_diverged or mode_diverged:

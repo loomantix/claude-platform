@@ -40,6 +40,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+          # Cache the resolved wheel cohort against the pinned-tool list
+          # below — the pins never drift within a PR, so the cache hits
+          # on every iter-fix push (~15s saved per re-run).
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - name: Install pinned tooling
         run: |
           python3 -m pip install \

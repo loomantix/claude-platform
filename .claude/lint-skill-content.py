@@ -35,11 +35,20 @@ from urllib.parse import urlsplit
 LINT_PATHS = [
     ".claude/skills/**/SKILL.md",
     ".claude/agents/**/*.md",
+    # Prompt templates synced to consumers are also fed straight to Claude
+    # at runtime — same threat surface as SKILL.md content. Currently:
+    # `.claude/skills/agent-loop/prompt.txt.template`.
+    ".claude/skills/**/prompt.txt.template",
 ]
 
 # `git diff` doesn't expand globs the way the shell does, so for the diff
 # path filter we pass the directories and post-filter the file list.
 DIFF_DIRS = [".claude/skills", ".claude/agents"]
+
+# Extensions to scan within DIFF_DIRS. `.md` for SKILL/agent prose,
+# `.template` for prompt templates synced to consumers (.txt.template
+# files end in `.template`).
+SCOPE_SUFFIXES = (".md", ".template")
 
 
 @dataclass(frozen=True)
@@ -258,7 +267,7 @@ def iter_added_lines(diff_text: str) -> Iterator[tuple[str, int, str]]:
 
 
 def _path_in_scope(path: str) -> bool:
-    return any(path.startswith(d + "/") for d in DIFF_DIRS) and path.endswith(".md")
+    return any(path.startswith(d + "/") for d in DIFF_DIRS) and path.endswith(SCOPE_SUFFIXES)
 
 
 def _git_diff(base_ref: str) -> str:
@@ -270,7 +279,7 @@ def _git_diff(base_ref: str) -> str:
 def _git_tracked_files() -> list[str]:
     cmd = ["git", "ls-files", "--", *DIFF_DIRS]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return [p for p in result.stdout.splitlines() if p.endswith(".md")]
+    return [p for p in result.stdout.splitlines() if p.endswith(SCOPE_SUFFIXES)]
 
 
 # ---------- self test ----------

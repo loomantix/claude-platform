@@ -1,9 +1,13 @@
 # Allowlist for `claude` CLI invocations inside synced shell scripts.
 # See .claude/lint-claude-cli-invocations.py — the lint hashes each
 # `# claude-cli-invocations:start` / `:end` region and refuses to pass
-# if the hash isn't listed here. Adding or rotating an entry requires
-# byte-level review of the locked region in the same PR.
+# if the (hash, path) pair isn't listed here. Adding or rotating an
+# entry requires byte-level review of the locked region in the same PR.
 #
-# Format (whitespace-separated): <sha256>  <description>
+# Format (whitespace-separated): <sha256>  <path>  <description>
+#
+# The path field binds each approval to a specific source file —
+# copying an allowlisted region into a new synced .sh file does NOT
+# inherit the approval; the reviewer has to add a separate entry.
 
-9b5f79f1c43203a9df1ef67a038b9f5d2dd3146757bb4253d1632306a4ccaf12  agent-loop.sh: spawn claude with bypassPermissions + consumer-owned prompt
+9b5f79f1c43203a9df1ef67a038b9f5d2dd3146757bb4253d1632306a4ccaf12  .claude/skills/agent-loop/scripts/agent-loop.sh  agent-loop.sh: spawn claude with bypassPermissions + consumer-owned prompt

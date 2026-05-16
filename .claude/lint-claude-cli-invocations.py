@@ -9,8 +9,10 @@ Any change to the locked region — flags, fallback literal, surrounding glue �
 breaks the hash and fails CI, forcing the edit to be reviewer-visible.
 
 Usage:
-    python3 .claude/lint-claude-cli-invocations.py             # scan in-scope files
-    python3 .claude/lint-claude-cli-invocations.py --self-test # run unit fixtures only
+    python3 .claude/lint-claude-cli-invocations.py              # scan in-scope files
+    python3 .claude/lint-claude-cli-invocations.py --self-test  # run unit fixtures only
+    python3 .claude/lint-claude-cli-invocations.py --compute-hash <path>...
+        # print each marked region's hash — use when rotating allowlist entries
 
 Exit codes: 0 clean, 1 findings, 2 usage/internal error.
 """
@@ -39,16 +41,18 @@ START_MARKER = "# claude-cli-invocations:start"
 END_MARKER = "# claude-cli-invocations:end"
 
 # Sensitive tokens that must only appear inside a marker pair. The binary-call
-# pattern catches `claude --flag`, `claude "$arg"`, and `claude $arg` — both
-# the flag form and the positional-arg form that an attacker might use to slip
-# in a fresh invocation. The `(?<![\w/.-])` guard skips path mentions like
-# `.claude/skills/...` and filename mentions like `claude.err`. The two flag
-# literals catch the dangerous escalation signal directly, even when the
-# `claude` token has been variable-aliased (`CMD=claude; $CMD --permission-mode
-# bypassPermissions ...`). Trivial obfuscation of these flag literals via
-# bash quote-concat is left to reviewer + CODEOWNERS defense.
+# pattern catches `claude --flag`, `claude -p`, `claude "$arg"`, `claude $arg`,
+# `claude < file`, `claude <<< str`, and path-qualified forms like
+# `/usr/local/bin/claude --print`. The lookbehind allows `/` so path-prefixed
+# invocations are detected, but blocks `\w` and `.-` so `.claude/skills/...`
+# path mentions and `claude.err` filename mentions don't false-flag. The
+# `--permission-mode` and `bypassPermissions` literals catch the dangerous
+# escalation signal directly even when the binary name has been variable-
+# aliased (`CMD=claude; $CMD --permission-mode bypassPermissions ...`).
+# Trivial obfuscation of these flag literals via bash quote-concat is left
+# to reviewer + CODEOWNERS defense.
 SENSITIVE_TOKEN_RE = re.compile(
-    r"(?<![\w/.-])claude\s+(?:--|[\"'$])"
+    r"(?<![\w.-])claude\s+(?:--?|[\"'$<])"
     r"|--permission-mode"
     r"|bypassPermissions"
 )
@@ -74,6 +78,7 @@ class Region:
 @dataclass(frozen=True)
 class AllowlistEntry:
     sha256: str
+    path: str  # bound to a specific source file — defends against region-copy attacks
     description: str
 
     def __post_init__(self) -> None:
@@ -84,10 +89,18 @@ class AllowlistEntry:
             raise ValueError(
                 f"sha256 must be 64 lowercase hex chars, got {self.sha256!r}"
             )
+        if not self.path:
+            raise ValueError("path must be non-empty")
 
 
 def extract_regions(path: str, text: str) -> tuple[list[Region], list[str]]:
-    """Find marker-bounded regions in a file. Returns (regions, errors)."""
+    """Find marker-bounded regions in a file. Returns (regions, errors).
+
+    Uses `keepends=True` because the body slice between markers is hashed
+    verbatim — line terminators are content. `find_sensitive_token_lines`
+    intentionally uses `keepends=False` (it only inspects line content, not
+    bytes), so the asymmetry between the two callers is by design.
+    """
     regions: list[Region] = []
     errors: list[str] = []
     lines = text.splitlines(keepends=True)
@@ -139,24 +152,30 @@ def find_sensitive_token_lines(path: str, text: str) -> list[tuple[int, str]]:
 def parse_allowlist(text: str) -> tuple[list[AllowlistEntry], list[str]]:
     entries: list[AllowlistEntry] = []
     errors: list[str] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        parts = line.split(None, 1)
-        if not parts:
+        parts = line.split(None, 2)
+        if len(parts) < 2:
+            errors.append(
+                f"{ALLOWLIST_PATH}:{lineno}: expected `<sha256>  <path>  <description>`, got: {line!r}"
+            )
             continue
-        sha = parts[0]
-        description = parts[1] if len(parts) == 2 else ""
+        sha, path = parts[0], parts[1]
+        description = parts[2] if len(parts) == 3 else ""
         if not re.fullmatch(r"[0-9a-f]{64}", sha):
             errors.append(f"{ALLOWLIST_PATH}:{lineno}: not a sha256: {sha!r}")
             continue
-        if sha in seen:
-            errors.append(f"{ALLOWLIST_PATH}:{lineno}: duplicate hash {sha}")
+        key = (sha, path)
+        if key in seen:
+            errors.append(
+                f"{ALLOWLIST_PATH}:{lineno}: duplicate (hash, path) {sha[:12]}…/{path}"
+            )
             continue
-        seen.add(sha)
-        entries.append(AllowlistEntry(sha256=sha, description=description))
+        seen.add(key)
+        entries.append(AllowlistEntry(sha256=sha, path=path, description=description))
     return entries, errors
 
 
@@ -170,14 +189,29 @@ def _git_tracked_files() -> list[str]:
     return [p for p in result.stdout.splitlines() if p.endswith(SCOPE_SUFFIX)]
 
 
+def _read_file_preserving_newlines(path: str) -> str:
+    """Read a file without Python's universal-newline translation.
+
+    The default text mode translates CRLF→LF on read, which would let an
+    attacker flip line endings without rotating the region hash — silently
+    defeating the byte-level invariant the allowlist is documented to enforce.
+    `newline=""` disables the translation; line endings are returned as-is.
+    """
+    with open(path, encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
 def scan(paths: list[str], allowlist_entries: list[AllowlistEntry]) -> int:
     """Return number of findings (0 = clean)."""
-    allowed_hashes = {e.sha256 for e in allowlist_entries}
+    # (hash, path) pairs are the unit of approval — an allowlisted region in
+    # `foo.sh` does NOT auto-approve the same bytes appearing in `bar.sh`.
+    # Defends against the region-copy attack (clone allowlisted block into a
+    # new synced .sh file, evade the gate).
+    allowed: set[tuple[str, str]] = {(e.sha256, e.path) for e in allowlist_entries}
     findings = 0
     for path in paths:
         try:
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read()
+            text = _read_file_preserving_newlines(path)
         except OSError as exc:
             # Security-lint posture: an attacker who can affect file
             # permissions might otherwise hide weaponized content from the scan.
@@ -190,11 +224,11 @@ def scan(paths: list[str], allowlist_entries: list[AllowlistEntry]) -> int:
             findings += 1
         for region in regions:
             digest = hash_region(region)
-            if digest not in allowed_hashes:
+            if (digest, path) not in allowed:
                 print(
-                    f"{path}:{region.start_line}: locked region hash not in allowlist."
+                    f"{path}:{region.start_line}: locked region hash not in allowlist for this path."
                 )
-                print(f"    expected entry: {digest}  <description of the change>")
+                print(f"    expected entry: {digest}  {path}  <description of the change>")
                 print(
                     f"    add the entry to {ALLOWLIST_PATH} in this PR — the diff is the audit trail."
                 )
@@ -212,6 +246,25 @@ def scan(paths: list[str], allowlist_entries: list[AllowlistEntry]) -> int:
                 )
                 findings += 1
     return findings
+
+
+def compute_hashes(paths: list[str]) -> int:
+    """Print each region's hash for the given paths. Helper for allowlist rotation."""
+    any_found = False
+    for path in paths:
+        try:
+            text = _read_file_preserving_newlines(path)
+        except OSError as exc:
+            print(f"unreadable: {path}: {exc}", file=sys.stderr)
+            return 2
+        regions, _ = extract_regions(path, text)
+        for region in regions:
+            any_found = True
+            print(f"{hash_region(region)}  {path}  <description of the change>")
+    if not any_found:
+        print("(no locked regions found in the given paths)", file=sys.stderr)
+        return 1
+    return 0
 
 
 # ---------- self test ----------
@@ -384,6 +437,11 @@ def run_self_test() -> int:
     check("COMMENT REFERENCE", len(inv) == 1, f"got {inv!r}")
     # The dangerous flag literals are caught even when the binary name has
     # been variable-aliased and the line itself doesn't contain `claude`.
+    # Line 2 of the fixture (`CMD=claude`) is deliberately NOT expected to
+    # match — `claude` at end-of-line has no following `\s+` so the binary
+    # pattern fails, and there's no flag literal on that line. If the regex
+    # is later widened to detect variable assignments, this expected count
+    # would change and the test should be updated deliberately.
     inv = find_sensitive_token_lines("x.sh", _FIXTURE_BYPASS_FLAG_OUTSIDE)
     check("BYPASS TOKENS", len(inv) == 1, f"got {inv!r}")
 
@@ -408,14 +466,30 @@ def run_self_test() -> int:
         check("SCAN(bare) findings", n >= 1, f"got {n}")
         check("SCAN(bare) message", f"{bare_path}:2:" in out, f"output:\n{out}")
 
-        # OK + allowlisted → 0 findings.
+        # OK + allowlisted (correct path) → 0 findings.
         ok_path = os.path.join(tmp, "ok.sh")
         with open(ok_path, "w") as fh:
             fh.write(_FIXTURE_OK)
         regions, _ = extract_regions(ok_path, _FIXTURE_OK)
-        entry = AllowlistEntry(sha256=hash_region(regions[0]), description="test")
+        entry = AllowlistEntry(
+            sha256=hash_region(regions[0]), path=ok_path, description="test"
+        )
         n, out = scan_into([ok_path], [entry])
         check("SCAN(ok+allowlist)", n == 0, f"got {n}; output:\n{out}")
+
+        # Path-binding gate: the same hash allowlisted for a DIFFERENT path
+        # must NOT auto-approve the region in this file. Defends against the
+        # region-copy attack — clone allowlisted bytes into a new synced .sh
+        # file and the gate still fires.
+        other_path = os.path.join(tmp, "ok-clone.sh")
+        with open(other_path, "w") as fh:
+            fh.write(_FIXTURE_OK)
+        n, out = scan_into([other_path], [entry])
+        check(
+            "SCAN(region-copy) blocked by path binding",
+            n >= 1 and "not in allowlist for this path" in out,
+            f"got {n}; output:\n{out}",
+        )
 
         # Markers deleted but allowlist entry stale → bare-token finding
         # surfaces. The stale entry is harmless on its own (no region to
@@ -437,7 +511,7 @@ def run_self_test() -> int:
             fh.write(_FIXTURE_MIXED_REGION_AND_BARE)
         mixed_regions, _ = extract_regions(mixed_path, _FIXTURE_MIXED_REGION_AND_BARE)
         mixed_entry = AllowlistEntry(
-            sha256=hash_region(mixed_regions[0]), description="test"
+            sha256=hash_region(mixed_regions[0]), path=mixed_path, description="test"
         )
         n, out = scan_into([mixed_path], [mixed_entry])
         check(
@@ -452,12 +526,12 @@ def run_self_test() -> int:
             fh.write(_FIXTURE_TWO_REGIONS)
         two_regions, _ = extract_regions(two_path, _FIXTURE_TWO_REGIONS)
         first_entry = AllowlistEntry(
-            sha256=hash_region(two_regions[0]), description="first"
+            sha256=hash_region(two_regions[0]), path=two_path, description="first"
         )
         n, out = scan_into([two_path], [first_entry])
         check(
             "SCAN(two-regions) flags unallowlisted second region",
-            n == 1 and "hash not in allowlist" in out,
+            n == 1 and "not in allowlist for this path" in out,
             f"got {n}; output:\n{out}",
         )
 
@@ -472,34 +546,92 @@ def run_self_test() -> int:
             f"got {n}; output:\n{out}",
         )
 
+        # CRLF on disk: write CRLF bytes through binary mode so Python's
+        # text-mode universal-newline translation can't normalize them
+        # before the lint sees them. The lint MUST read with newline=""
+        # and treat the bytes as written, so the LF and CRLF versions of
+        # the same logical region hash differently.
+        lf_disk_path = os.path.join(tmp, "lf.sh")
+        crlf_disk_path = os.path.join(tmp, "crlf.sh")
+        with open(lf_disk_path, "wb") as fh:
+            fh.write(_FIXTURE_WHITESPACE_SENSITIVE_A.encode("utf-8"))
+        with open(crlf_disk_path, "wb") as fh:
+            fh.write(_FIXTURE_CRLF_MARKERS.encode("utf-8"))
+        lf_text = _read_file_preserving_newlines(lf_disk_path)
+        crlf_text = _read_file_preserving_newlines(crlf_disk_path)
+        lf_disk_regions, _ = extract_regions(lf_disk_path, lf_text)
+        crlf_disk_regions, _ = extract_regions(crlf_disk_path, crlf_text)
+        check(
+            "ON-DISK CRLF regions parse",
+            len(lf_disk_regions) == 1 and len(crlf_disk_regions) == 1,
+            f"lf={lf_disk_regions!r} crlf={crlf_disk_regions!r}",
+        )
+        if lf_disk_regions and crlf_disk_regions:
+            check(
+                "ON-DISK CRLF hash differs from LF after file-read",
+                hash_region(lf_disk_regions[0])
+                != hash_region(crlf_disk_regions[0]),
+                "universal-newline translation must not normalize CRLF→LF",
+            )
+
     # --- allowlist parser ---
     allowlist_fixture = (
         "# header comment\n"
-        + ("0" * 64) + "  description here\n"
+        + ("0" * 64) + "  path/to/file.sh  description here\n"
         + "\n"
-        + "abc-not-sha256\n"
+        + "abc-not-sha256  path/to/other.sh  bad\n"
+        + ("1" * 64) + "  too-few-cols-was-here-but-actually-this-is-a-path\n"
     )
     entries, errors = parse_allowlist(allowlist_fixture)
-    check("ALLOWLIST entry count", len(entries) == 1, f"got {entries!r}")
+    check("ALLOWLIST entry count", len(entries) == 2, f"got {entries!r}")
     check(
         "ALLOWLIST error message",
         bool(errors) and "not a sha256" in errors[0],
         f"got {errors!r}",
     )
 
-    # Duplicate hash → reported, only first kept.
-    dup_fixture = ("0" * 64) + "  first\n" + ("0" * 64) + "  second\n"
+    # Same hash, different path → both kept (path-binding is the dedup key).
+    dual_fixture = (
+        ("0" * 64) + "  a.sh  first\n"
+        + ("0" * 64) + "  b.sh  second\n"
+    )
+    entries, errors = parse_allowlist(dual_fixture)
+    check(
+        "ALLOWLIST same-hash-different-path keeps both",
+        len(entries) == 2 and not errors,
+        f"entries={entries!r} errors={errors!r}",
+    )
+
+    # Same (hash, path) → duplicate, second rejected.
+    dup_fixture = (
+        ("0" * 64) + "  a.sh  first\n"
+        + ("0" * 64) + "  a.sh  second\n"
+    )
     entries, errors = parse_allowlist(dup_fixture)
     check(
-        "ALLOWLIST duplicate detected",
+        "ALLOWLIST duplicate (hash, path) detected",
         len(entries) == 1 and any("duplicate" in e for e in errors),
+        f"entries={entries!r} errors={errors!r}",
+    )
+
+    # Missing path field → format error.
+    short_fixture = ("0" * 64) + "\n"
+    entries, errors = parse_allowlist(short_fixture)
+    check(
+        "ALLOWLIST missing path errors",
+        not entries and any("expected" in e for e in errors),
         f"entries={entries!r} errors={errors!r}",
     )
 
     # --- dataclass invariant enforcement ---
     try:
-        AllowlistEntry(sha256="not-a-hash", description="x")
+        AllowlistEntry(sha256="not-a-hash", path="x", description="x")
         failures.append("AllowlistEntry: expected ValueError on invalid sha256")
+    except ValueError:
+        pass
+    try:
+        AllowlistEntry(sha256="0" * 64, path="", description="x")
+        failures.append("AllowlistEntry: expected ValueError on empty path")
     except ValueError:
         pass
     try:
@@ -513,7 +645,7 @@ def run_self_test() -> int:
         for f in failures:
             print(f"  {f}", file=sys.stderr)
         return 1
-    print(f"Self-test ok: {32 - len(failures)} assertions across extract/hash/scan/parse/invariants.")
+    print("Self-test ok: all assertions passed.")
     return 0
 
 
@@ -524,10 +656,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run the built-in fixtures (no git access).",
     )
+    parser.add_argument(
+        "--compute-hash",
+        metavar="PATH",
+        nargs="+",
+        help=(
+            "Print each marker-bounded region's hash for the given path(s). "
+            "Use to generate or rotate allowlist entries when you edit a locked region."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
         return run_self_test()
+    if args.compute_hash:
+        return compute_hashes(args.compute_hash)
 
     try:
         paths = _git_tracked_files()

@@ -76,14 +76,9 @@ targets:
     substitutions: []
     create_if_missing: true
 
-  # /agent-loop reads the Claude prompt from this consumer-owned file at
-  # runtime. The script falls back to a baked-in literal when the file is
-  # absent (e.g. between consumer creation and first sync), but the
-  # one-shot bootstrap immediately makes the prompt consumer-owned — so a
-  # malicious upstream change to the script's fallback literal cannot
-  # alter what already-onboarded consumers send to Claude. See
-  # `.claude/lint-claude-cli-invocations.py` for the CI gate that
-  # additionally locks any change to the `claude --` invocation block.
+  # Consumer-owned Claude prompt. `create_if_missing: true` bootstraps it
+  # once; later upstream edits to `prompt.txt.template` no longer reach
+  # already-onboarded consumers.
   - source: .claude/skills/agent-loop/prompt.txt.template
     destination: .claude/skills/agent-loop/prompt.txt
     substitutions: []

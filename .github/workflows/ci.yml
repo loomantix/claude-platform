@@ -116,12 +116,9 @@ jobs:
           python-version: '3.12'
       - name: Self-test the lint patterns
         run: python3 .claude/lint-claude-cli-invocations.py --self-test
+      # Whole-tree scan, not diff-based — resists splitting a weaponizing
+      # change across two PRs to escape the gate.
       - name: Lint synced shell scripts for `claude --` invocations
-        # Whole-tree scan (not diff-only) — the threat model is "current
-        # repo state ships malicious bytes to consumers," so we re-check
-        # every in-scope file on every push. Cheap (one file today,
-        # bounded growth) and resistant to attacks that try to split a
-        # weaponizing change across two PRs to escape diff-based gates.
         run: python3 .claude/lint-claude-cli-invocations.py
 
   sync-targets:

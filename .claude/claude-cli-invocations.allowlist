@@ -1,15 +1,9 @@
 # Allowlist for `claude` CLI invocations inside synced shell scripts.
+# See .claude/lint-claude-cli-invocations.py — the lint hashes each
+# `# claude-cli-invocations:start` / `:end` region and refuses to pass
+# if the hash isn't listed here. Adding or rotating an entry requires
+# byte-level review of the locked region in the same PR.
 #
-# Each entry pins the bytes of one `# claude-cli-invocations:start` /
-# `:end` region. The lint at `.claude/lint-claude-cli-invocations.py`
-# computes the sha256 of the bytes between each marker pair and refuses
-# to pass if the hash isn't listed here — so any change to the locked
-# region must also update this file, and the resulting diff is the
-# audit trail for the reviewer.
-#
-# Format (whitespace-separated):
-#   <sha256>  <description>
-#
-# The description is informational; only the hash is checked.
+# Format (whitespace-separated): <sha256>  <description>
 
-0d44727f8dab1f2a1cac4d8b81867ca970210d72b78cd57f754287c8e1ff7c0d  agent-loop.sh: spawn claude with bypassPermissions + consumer-owned prompt
+9b5f79f1c43203a9df1ef67a038b9f5d2dd3146757bb4253d1632306a4ccaf12  agent-loop.sh: spawn claude with bypassPermissions + consumer-owned prompt

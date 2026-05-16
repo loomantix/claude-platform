@@ -463,25 +463,28 @@ while [ $ITERATION -lt $MAX_ITERATIONS ]; do
     FIFO="$ITER_TMPDIR/fifo"
     mkfifo "$FIFO"
 
-    # Capture claude's stderr to a tempfile so auth/network/crash errors
-    # surface on a nonzero exit. Suppressing stderr via `2>/dev/null`
-    # would hide these and the loop would just see an empty FIFO.
+    # Don't drop stderr — auth/network errors would otherwise be invisible.
     CLAUDE_ERR="$ITER_TMPDIR/claude.err"
 
     # claude-cli-invocations:start
-    # Locked region: changes must update .claude/claude-cli-invocations.allowlist.
-    # The synced script runs Claude with --permission-mode bypassPermissions,
-    # so a malicious literal change here would weaponize every consumer.
+    # Locked region — see .claude/lint-claude-cli-invocations.py.
     PROMPT_FILE="$PROJECT_DIR/.claude/skills/agent-loop/prompt.txt"
-    if [ -f "$PROMPT_FILE" ]; then
+    if [ -s "$PROMPT_FILE" ] && [ -r "$PROMPT_FILE" ]; then
         PROMPT_TEMPLATE=$(cat "$PROMPT_FILE")
     else
-        # Fallback for consumers between repo creation and first upstream
-        # sync (sync bootstraps prompt.txt via create_if_missing: true).
+        # Fallback for consumers between repo creation and first upstream sync.
         PROMPT_TEMPLATE="Read @agent-loop-instructions.md and follow the instructions. Your assigned issue is #{ISSUE_ID}. Run 'gh issue view {ISSUE_ID}' to see the full description, then complete it."
     fi
-    # CLAIMED_ID was validated as [0-9]+ in pick_next_issue, so the
-    # substitution can't smuggle shell metacharacters into the prompt.
+    if [ -z "$PROMPT_TEMPLATE" ]; then
+        echo -e "${RED}✗${NC} prompt template empty after read — aborting iteration"
+        exit 1
+    fi
+    # Explicit guard, not a comment claim — pick_next_issue's number-from-jq
+    # path is always digits today, but a future refactor could change that.
+    if ! [[ "$CLAIMED_ID" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}✗${NC} CLAIMED_ID is not numeric: $CLAIMED_ID"
+        exit 1
+    fi
     PROMPT="${PROMPT_TEMPLATE//\{ISSUE_ID\}/$CLAIMED_ID}"
 
     claude --chrome --permission-mode bypassPermissions --verbose --print "$PROMPT" \

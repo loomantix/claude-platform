@@ -24,7 +24,7 @@ Two paths exist. Pick the right one before starting.
 1. **Make changes locally.**
 2. **Run `/deepgrill`.** Orchestrator that runs `/refactorpass` + `/grill deep` (full agent matrix: code-reviewer, silent-failure-hunter, type-design-analyzer, comment-analyzer, pr-test-analyzer, security-review).
 3. **Push and open the PR.**
-4. **Run `/reviewit <pr-number> deep`.** Fires `/review` + Gemini Flash + Copilot in parallel, dedups across all three, **4-iteration review cap**. Review-fix commits push directly (no per-iter `/refactorpass`).
+4. **Run `/reviewit <pr-number> deep`.** Fires `/review` + Gemini Flash + Copilot in parallel, dedups across all three, **4-iteration review cap**. Review-fix commits push directly (no per-iter `/refactorpass`). After iterations 2 and 3, a **cost-shift checkpoint** pauses and asks the user when findings are still significant (any critical, or total ≥ 5 post-dedup) — continue the chain, bail to a local `/deepgrill` pass on the branch, or stop and merge as-is. Designed to short-circuit non-converging PRs before they spend the remaining Gemini/Copilot budget.
 5. **Review and merge.**
 
 ### When to use deep

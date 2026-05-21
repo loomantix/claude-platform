@@ -65,7 +65,7 @@ Print:
 Next steps for the deep chain:
   git push
   gh pr create --title "..." --body "..."
-  /reviewit <pr-number> deep    # full 3-reviewer 4-iter post-push chain
+  /reviewit <pr-number> deep    # Gemini + Copilot 4-iter loop with early-exit, then a final /deepgrill on the PR
 ```
 
 Do not push or open the PR — the developer takes the final action so they can compose the PR title/body deliberately.

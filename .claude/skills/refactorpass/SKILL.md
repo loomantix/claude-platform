@@ -97,7 +97,7 @@ Tell the user:
 - HEAD: <SHA>
 
 Next: `git push`.
-After push and PR creation: invoke `/reviewit <pr-number>` (or `/reviewit <pr> deep` for the full 3-reviewer 4-iter chain) to orchestrate AI review.
+After push and PR creation: invoke `/reviewit <pr-number>` (or `/reviewit <pr> deep` for the 4-iter chain that ends with a final `/deepgrill`) to orchestrate AI review.
 ```
 
 ---

@@ -152,8 +152,8 @@ If N: stop here. The user takes over (maybe wants to keep iterating manually).
 Next:
   git push
   gh pr create --title "..." --body "..."
-  /reviewit <pr-number>          # lean (Gemini Flash + Copilot, 2 iters)
-  /reviewit <pr-number> deep     # full (/review + Gemini + Copilot, 4 iters)
+  /reviewit <pr-number>          # lean (Gemini + Copilot, 2 iters)
+  /reviewit <pr-number> deep     # deep (Gemini + Copilot, 4 iters w/ early-exit + final /deepgrill)
 ```
 
 If lean mode was used and the changeset touches load-bearing surfaces (auth, crypto, schema migrations, sync mechanism, sync-propagating files under `.claude/skills/**` or `scripts/sync*`), append:

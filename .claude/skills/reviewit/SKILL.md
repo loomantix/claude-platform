@@ -1,16 +1,21 @@
 ---
 name: reviewit
-description: Post-push AI review orchestrator. Lean default fires Gemini Flash + Copilot, handles Gemini first, then folds in Copilot, caps at 2 iterations. `deep` arg adds /review and restores 4-iter cap. Dedups findings, addresses each, replies in PR thread.
-argument-hint: PR number (e.g., 42), optionally followed by "deep" (e.g., 42 deep) for the full 3-reviewer 4-iter chain
+description: Post-push AI review orchestrator. Both modes fire Gemini Flash + Copilot at the same iteration watermark with staggered handling (Gemini first, Copilot folded in) — no in-skill /review. Lean caps at 2 iterations. `deep` arg bumps the cap to 4, early-exits when an iteration produced no fix-pushes, and runs a final /deepgrill so fresh agents look at the PR's current state.
+argument-hint: PR number (e.g., 42), optionally followed by "deep" (e.g., 42 deep) for the 4-iter chain + final /deepgrill
 ---
 
 # reviewit — post-push AI review cycle
 
 You are orchestrating the post-push AI review cycle for an open pull request.
 
-**Lean mode (default)**: Two reviewers are fired at the same iteration watermark — Gemini Flash and GitHub Copilot — but handling is staggered. Act on Gemini as soon as it returns, push those fixes, then collect Copilot when it finishes before starting the next iteration. The Claude-side review (`/review`) is intentionally skipped because `/grill` already ran Claude-side adversarial sub-agents pre-push. Cap is **2 iterations**.
+**Lean mode (default)**: Two reviewers are fired at the same iteration watermark — Gemini Flash and GitHub Copilot — but handling is staggered. Act on Gemini as soon as it returns, push those fixes, then collect Copilot when it finishes before starting the next iteration. Cap is **2 iterations**.
 
-**Deep mode (`deep` arg)**: Three reviewers — Claude's built-in `/review` (auto-detects which sub-agents to invoke), Gemini Flash, and GitHub Copilot. Handling is still staggered: `/review` + Gemini form the fast pass, Copilot is folded in after those fixes are pushed. Cap is **4 iterations**. Use when the user has invoked `/deepgrill` pre-push or has explicitly opted into the full chain on a complex/high-risk PR.
+**Deep mode (`deep` arg)**: Same two reviewers as lean — Gemini Flash + Copilot, same staggered fast/delayed handling. No in-skill `/review`. Two behavioral changes vs lean:
+
+1. **4-iter cap with early-exit on no-fix iters.** If an iteration produced no `fix` resolutions across either the Gemini fast pass or the Copilot delayed pass (everything was deferred or dismissed, or there were no findings), exit the loop — re-firing reviewers on an unchanged HEAD just re-posts the same findings.
+2. **Final `/deepgrill` on the PR.** After the loop exits for any reason (clean, early-exit, OR iter cap), invoke `Skill(skill="deepgrill")`. This runs `/refactorpass` + `/grill deep` (the full Claude-side agent matrix) as a separate sub-skill — fresh agents looking at the PR's current state. This replaces the older deep-mode `/review` fire that ran _inside_ Phase 1 and routinely caused the orchestrator to drop out of the polling loop early.
+
+In both modes, the `/grill` pre-push pass already covered Claude-side adversarial agents on the pre-push tree — so post-push the orchestrator delegates Claude-side review to a single post-loop `/deepgrill` (deep mode only) rather than re-running anything inline.
 
 This replaces the older `/review-cycle` skill. Auto-trigger of Gemini and Copilot is intentionally disabled — `/reviewit` is the only path that fires AI review.
 
@@ -21,10 +26,10 @@ This replaces the older `/review-cycle` skill. Auto-trigger of Gemini and Copilo
 ## Core principles
 
 - **Full auto by default**: once the PR number is provided, do not ask for confirmation between phases. Fix everything fixable, defer what isn't, dismiss false positives. Present the summary at the end.
-- **Reviewers are complementary**: each catches things the others miss. Unique findings are the primary value. Overlap is acknowledged in replies but not dwelt on.
-- **Deduplicate before acting**: don't fix the same thing twice (lean) or three times (deep). For staggered Copilot, dedupe against both reviewer findings and the code already changed by the Gemini/`/review` fix commit.
+- **Reviewers are complementary**: each catches things the other misses. Unique findings are the primary value. Overlap is acknowledged in replies but not dwelt on.
+- **Deduplicate before acting**: don't fix the same thing twice. For staggered Copilot, dedupe against both reviewer findings and the code already changed by the Gemini fix commit.
 - **Reply to every comment** _after_ the push has produced the real commit SHA: for fixes, post the commit SHA; for deferrals, link the tracking issue; for dismissals, record the rationale. Replies happen in Phase 4 step 4, not in Phase 3 — Phase 3 only records resolutions to `/tmp`. The reply step is the most-skipped step in this skill; do not fold it into "commit + push" or treat it as optional.
-- **Cap at `MAX_ITERS` review iterations**: each iteration is `(fire reviewers → handle Gemini/Claude fast pass → push/reply → handle Copilot → push/reply → loop check)`. After `MAX_ITERS`, stop and hand back to the user. The reply step is part of an iteration's completion criteria — an iteration that pushes fixes but doesn't post replies is incomplete. If a PR needs more than the cap, it's signaling something deeper (scope too large, or repeated regressions).
+- **Cap at `MAX_ITERS` review iterations**: each iteration is `(fire reviewers → handle Gemini fast pass → push/reply → handle Copilot → push/reply → loop check)`. After `MAX_ITERS`, stop the loop and proceed to Phase 5.5 (deep) or Phase 6 (lean). The reply step is part of an iteration's completion criteria — an iteration that pushes fixes but doesn't post replies is incomplete. If a PR needs more than the cap, it's signaling something deeper (scope too large, or repeated regressions).
 - **No per-iter `/refactorpass`**: review-fix commits push directly. The base was refactor-passed pre-push, and re-running `/simplify` on small surgical fixes has been validated to add negligible value.
 
 ---
@@ -55,24 +60,20 @@ This replaces the older `/review-cycle` skill. Auto-trigger of Gemini and Copilo
 
    ```
    This PR looks docs/config-only — N files, no source code changes.
-   Full chain (/review + Gemini Flash + Copilot) is theatre and Gemini Flash
-   costs $0.05–$0.20 even on near-empty diffs.
+   Gemini Flash costs $0.05–$0.20 even on near-empty diffs.
 
    How to proceed?
-     [F] Free-only: run /review (Claude meta-reviewer, no spend), skip
-         Gemini and Copilot. Recommended for typo / formatting / docs PRs.
      [C] Run the full chain anyway. Pick this if you specifically want
          Gemini's eyes on the doc content.
      [S] Skip everything — just merge.
    ```
 
-   - **F**: proceed to Phase 1 but ONLY fire `/review`. Skip the Gemini and Copilot fires; record "skipped: docs-only" in the final summary.
-   - **C**: proceed to Phase 1 normally (full three-reviewer fire).
+   - **C**: proceed to Phase 1 normally.
    - **S**: exit cleanly. Print a summary noting nothing was run.
 
    For mixed changesets (some source, some docs), run the full chain (Phase 1 onward) without prompting — source files justify the spend.
 
-6. **TodoWrite**: create tasks for "fire reviewers", "parse + dedup", "address findings (record resolutions)", "commit + push fixes", "post replies with real SHA", "loop check", per iteration. The "post replies" task is its own line item — don't fold it into "commit + push" or it gets skipped.
+6. **TodoWrite**: create tasks per iteration for "fire reviewers", "parse + dedup (Gemini fast pass)", "address findings (record resolutions)", "commit + push fixes", "post replies with real SHA", "poll Copilot", "parse + dedup (Copilot delayed pass)", "address + push + reply", "loop check". In deep mode, add a final "run /deepgrill on the PR" task. The "post replies" tasks are their own line items — don't fold them into "commit + push" or they get skipped.
 
 ---
 
@@ -101,16 +102,6 @@ gh api repos/{owner}/{repo}/pulls/<pr-number>/reviews \
   > /tmp/pr-<pr-number>-reviews.json
 ```
 
-### Fire `/review` (Claude meta-reviewer) — **deep mode only**
-
-**Skip in lean mode.** `/grill` already ran Claude-side adversarial agents pre-push, so post-push `/review` is largely redundant in lean mode. Spawning multiple sub-agents per iteration is the largest single token sink and is reserved for deep mode.
-
-In **deep mode only**: invoke the built-in `/review` via the Skill tool: `Skill(skill="review", args="<pr-number>")`. It auto-detects which sub-agents to run based on the PR's content (security-relevant changes → `security-review`; type-heavy changes → `type-design-analyzer`; etc.). Capture its output.
-
-**Important**: the built-in `/review` may post inline review comments on the PR itself, OR may return findings in-session as a final summary, OR both. Capture whichever it produces — both are valid finding sources for Phase 2 dedup.
-
-> ⚠️ **Do not stop after `/review` returns.** The `/review` skill's prompt arrives as a fully self-contained instruction set ("you are an expert code reviewer, do these 4 steps") and can override the framing of "I'm inside /reviewit Phase 1." When control returns from the Skill tool, treat the output as **one fast-pass deliverable** and proceed to Gemini polling below — do not summarize, do not hand back to the user, do not assume the workflow is done. Gemini and Copilot are still cooking; their findings need polling, dedup, and replies. The cycle isn't complete until Phase 6.
-
 ### Fire Gemini (Flash by default)
 
 ```bash
@@ -136,19 +127,17 @@ gh api graphql \
 
 Copilot bot node id is `BOT_kgDOCnlnWA` (constant). Verify with `gh api repos/{owner}/{repo}/pulls/<n>/requested_reviewers --jq '.users[].login'` → expected `Copilot`. The mutation is idempotent — safe to call across iterations. If Copilot already reviewed the current HEAD (`commit_id == ITERATION_HEAD` from the polling step below), skip re-requesting.
 
-### Wait for the fast reviewer
+### Wait for Gemini (the fast reviewer)
 
 Do not wait for Copilot before acting on Gemini. Copilot is usually much slower, so blocking the entire iteration on it leaves fast Gemini findings idle. The efficient sequence is:
 
 1. Fire Gemini and Copilot at the same `ITERATION_HEAD`.
-2. Wait for Gemini (and use `/review` output too in deep mode).
-3. Deduplicate, fix, push, and reply to Gemini/`/review` findings.
+2. Wait for Gemini.
+3. Deduplicate, fix, push, and reply to Gemini findings.
 4. Then poll Copilot for the original `ITERATION_HEAD`, dedupe against already-fixed issues, and handle any remaining findings.
 5. Only after Copilot is handled or explicitly timed out should the next iteration begin.
 
 Each reviewer has a different completion signal. **The polling check must validate that the review pertains to `ITERATION_HEAD` (current HEAD), not a stale review from a prior iteration on the same PR.**
-
-- **`/review`** (deep mode only): returns control to this session when done. Synchronous from the orchestrator's perspective. Lean mode skips this. Its findings join the Gemini fast pass.
 
 - **Gemini**: posts an issue comment with `<!-- GEMINI_REVIEW -->` marker, plus inline comments with `<!-- GEMINI_INLINE -->` marker. Poll every 30s, timeout 10 min:
 
@@ -165,11 +154,11 @@ Each reviewer has a different completion signal. **The polling check must valida
 
   Length ≥ 1 → Gemini has posted for this iteration.
 
-If Gemini times out and `/review` produced no deep-mode findings, stop cleanly with a resume command rather than waiting on Copilot first. If Gemini times out but `/review` did produce findings, handle the `/review` findings as the fast pass, then continue to Copilot.
+If Gemini times out (no finding at `ITERATION_HEAD` within the 10 min budget), stop cleanly with a resume command rather than waiting on Copilot first. The cycle expects Gemini to be the fast lane; if Gemini didn't fire at all (workflow misconfiguration, missing API key, etc.), surface that to the user before sinking time into Copilot polling.
 
 ### Poll Copilot after the fast-pass push
 
-After the Gemini/`/review` fix commit is pushed and replies are posted, poll Copilot for the original `ITERATION_HEAD`. It is expected that Copilot may be reviewing the pre-fix head; use that output as delayed feedback for the same iteration, not as permission to skip it.
+After the Gemini fix commit is pushed and replies are posted, poll Copilot for the original `ITERATION_HEAD`. It is expected that Copilot may be reviewing the pre-fix head; use that output as delayed feedback for the same iteration, not as permission to skip it.
 
 - **Copilot**: posts findings via one of three modes — check **both** the reviews endpoint and the inline-comments endpoint, treat either signal as completion. Poll every 30s, timeout 10 min when `--wait` is in effect; otherwise poll briefly and stop with a resume command if it is still pending:
 
@@ -219,12 +208,12 @@ If Copilot is still pending after the non-`--wait` poll budget, stop cleanly and
 
 ## Phase 2: Parse, categorize, deduplicate
 
-Run this phase twice when needed:
+Run this phase twice per iteration:
 
-- **Fast pass**: parse Gemini and `/review` findings, dedupe them, then proceed through fixes/replies.
-- **Delayed Copilot pass**: after the fast-pass push, parse Copilot findings for the original `ITERATION_HEAD`, dedupe them against the fast-pass findings and current code, then fix/reply only what remains.
+- **Gemini fast pass**: parse Gemini findings (inline + summary), dedupe within them, then proceed through fixes/replies.
+- **Delayed Copilot pass**: after the fast-pass push, parse Copilot findings for the original `ITERATION_HEAD`, dedupe them against the Gemini findings and current code, then fix/reply only what remains.
 
-For Copilot findings already fixed by the fast-pass commit, do not edit code again. Reply with the fast-pass commit SHA and record the comment id as handled.
+For Copilot findings already fixed by the Gemini commit, do not edit code again. Reply with the Gemini commit SHA and record the comment id as handled.
 
 ### Refresh comment fixtures
 
@@ -268,10 +257,6 @@ Gemini posts in TWO places:
 
 Severity emoji markers in Gemini bodies: 🔴 critical, 🟡 suggestion, 🟢 nitpick, 💡 question.
 
-### Parse `/review` findings (deep mode only)
-
-In **deep mode**, parse whatever `/review` produced — in-session output or PR-posted comments. If it posted inline comments, they're attributable via the reviewer's bot login (varies; check the `user.login` field in the comments JSON). In **lean mode**, skip — `/review` was not fired.
-
 ### Deduplicate across reviewers
 
 Two findings are duplicates if they:
@@ -279,29 +264,25 @@ Two findings are duplicates if they:
 - Reference the same file AND same line range (±5 lines), OR
 - Reference the same file AND describe the same issue (semantic match)
 
-For each group, classify:
+For each group, classify as `pair_overlap` (Gemini + Copilot both caught it) or `unique` (only one reviewer).
 
-- **Lean mode**: `pair_overlap` (Gemini + Copilot caught it) or `unique` (only one reviewer)
-- **Deep mode**: `triple_overlap` (all three), `pair_overlap` (any two), or `unique`
+In the staggered flow, Gemini's findings are dedupe-classified during the Gemini fast pass; Copilot's findings are dedupe-classified during the delayed pass against the already-handled Gemini set (so an "overlap" in the Copilot pass means "Gemini already addressed this — just reply with the Gemini fix SHA").
 
 ### Present comparison
 
 ```
 ## Review Comparison — PR #<number>, iteration <N>
 
-| Severity        | /review | Gemini | Copilot | Triple | Pair | Unique |
-|-----------------|---------|--------|---------|--------|------|--------|
-| Critical        |         |        |         |        |      |        |
-| Suggestions     |         |        |         |        |      |        |
-| Nitpicks        |         |        |         |        |      |        |
-| Questions       |         |        |         |        |      |        |
-| **Total**       |         |        |         |        |      |        |
-
-### Unique to /review
-1. [severity] file:line — summary
+| Severity        | Gemini | Copilot | Pair | Unique |
+|-----------------|--------|---------|------|--------|
+| Critical        |        |         |      |        |
+| Suggestions     |        |         |      |        |
+| Nitpicks        |        |         |      |        |
+| Questions       |        |         |      |        |
+| **Total**       |        |         |      |        |
 
 ### Unique to Gemini
-...
+1. [severity] file:line — summary
 
 ### Unique to Copilot
 ...
@@ -324,7 +305,7 @@ For each deduplicated finding in the active pass, ordered by severity (critical 
    - **Defer**: create a GitHub issue (label: `from-ai-review`). Capture the issue URL.
    - **Dismiss**: false positive — write down the rationale.
 3. **Execute resolution** — Edit / Write / `gh issue create` as needed.
-4. **Record the resolution to `/tmp/pr-<pr-number>-iter-<N>-<pass>-resolutions.json`** as **one row per reply target** (= one row per original reviewer comment). Use `fast` for Gemini/`/review` and `copilot` for delayed Copilot. Phase 4 step 5 reads this file and posts exactly one reply per row. **Do not post any reply yet** — the SHA isn't known until after the push.
+4. **Record the resolution to `/tmp/pr-<pr-number>-iter-<N>-<pass>-resolutions.json`** as **one row per reply target** (= one row per original reviewer comment). Use `gemini` for the Gemini fast pass and `copilot` for the delayed Copilot pass. Phase 4 step 5 reads this file and posts exactly one reply per row. **Do not post any reply yet** — the SHA isn't known until after the push.
 
    **File format**: a single JSON array `[{...}, {...}, ...]`. Build the full array in-memory while iterating findings, then call `Write(file_path, content=<json-array>)` once at the end of Phase 3. Don't try to "append" rows to a JSON file in place — naïve append produces invalid JSON. Phase 4 reads with `jq -c '.[]'` and iterates row-by-row.
 
@@ -334,8 +315,8 @@ For each deduplicated finding in the active pass, ordered by severity (critical 
 
    ```text
    {
-     "finding_id": <numeric comment id from GitHub, or null for gemini-summary and /review in-session findings>,
-     "reviewer": "copilot" | "gemini-inline" | "gemini-summary" | "review",
+     "finding_id": <numeric comment id from GitHub, or null for gemini-summary findings>,
+     "reviewer": "copilot" | "gemini-inline" | "gemini-summary",
      "path": "<file path>",
      "line": <line number or null>,
      "resolution": "fix" | "defer" | "dismiss",
@@ -351,13 +332,12 @@ For each deduplicated finding in the active pass, ordered by severity (critical 
    - `copilot` — Copilot inline review comment (`user.login` matches `copilot`)
    - `gemini-inline` — `github-actions[bot]` comment with `<!-- GEMINI_INLINE -->` marker
    - `gemini-summary` — finding present only in the Gemini summary `<!-- GEMINI_REVIEW -->` issue comment, no inline equivalent. `finding_id` is null; `finding_text` is required (used to quote the original finding in the new top-level issue comment Phase 4 will post).
-   - `review` — `/review` deep-mode finding. If posted inline on the PR, `finding_id` is the inline comment id and a normal inline reply is posted. If only produced in-session, `finding_id` is null and Phase 4 skips the GitHub reply (recorded in the Phase 6 summary only).
 
 ---
 
 ## Phase 4: Commit, push, and post replies
 
-Run this phase after each pass that produced code changes or reply-worthy resolutions: once for the Gemini/`/review` fast pass, and again for delayed Copilot if it has remaining findings. If a pass has only dismissals or already-fixed findings, skip the commit when there are no file changes, but still post the replies with the commit SHA that resolved or justified the finding.
+Run this phase after each pass that produced code changes or reply-worthy resolutions: once for the Gemini fast pass, and again for the delayed Copilot pass if it has remaining findings. If a pass has only dismissals or already-fixed findings (or no findings at all), skip the commit when there are no file changes, but still post the replies — with the prior Gemini-commit SHA for "already fixed" cases, or no SHA for dismissals.
 
 1. **Stage and commit**:
 
@@ -431,7 +411,7 @@ Run this phase after each pass that produced code changes or reply-worthy resolu
      ```
 
    Endpoints (route by `reviewer` field):
-   - `copilot`, `gemini-inline`, `review` (when `finding_id` is non-null):
+   - `copilot`, `gemini-inline` (when `finding_id` is non-null):
 
      ```bash
      gh api -X POST repos/{owner}/{repo}/pulls/<pr-number>/comments/<finding_id>/replies \
@@ -447,19 +427,47 @@ Run this phase after each pass that produced code changes or reply-worthy resolu
      <assembled body>"
      ```
 
-   - `review` with null `finding_id` (in-session output that wasn't posted to the PR): skip the GitHub reply, note the resolution in the Phase 6 summary instead.
-
    Iterate the resolutions file row-by-row. If any single reply POST fails, log the failure and continue with the rest — partial reply coverage is better than no replies. Surface the count of failed-reply POSTs in the Phase 6 summary so the user can manually follow up.
 
 ---
 
 ## Phase 5: Loop control
 
-After each iteration:
+After each iteration (both the Gemini fast pass and the Copilot delayed pass complete), decide whether to continue:
 
-1. **If iteration count < `MAX_ITERS` AND the fast pass plus delayed Copilot pass are handled for this iteration**: start the next iteration by re-firing Phase 1 against the latest PR head.
-2. **If iteration count < `MAX_ITERS` AND all reviewers came back clean**: success. Skip to Phase 6.
-3. **If iteration count == `MAX_ITERS`**: stop regardless. Hand back to the user with the iteration-cap message. In lean mode (cap=2), the message also notes that `/reviewit <pr> deep` is available if more iterations are wanted.
+- **Lean mode**:
+  1. If iteration count == `MAX_ITERS` (2): exit the loop, proceed to Phase 6.
+  2. Else if any reviewer found new findings on the post-fix HEAD (re-fire Phase 1 at the start of the next iteration to detect): start the next iteration.
+  3. Else (both reviewers clean): exit the loop, proceed to Phase 6.
+
+- **Deep mode** — same shape, but with an earlier exit:
+  1. If iteration count == `MAX_ITERS` (4): exit the loop, proceed to **Phase 5.5**.
+  2. Else if this iteration produced ≥1 `fix` resolution across either the Gemini fast pass or the Copilot delayed pass (a commit was pushed): start the next iteration so reviewers can validate the fix.
+  3. Else (no fix resolutions in either pass — all findings were defer/dismiss, or there were no findings at all): **early-exit** the loop, proceed to **Phase 5.5**.
+
+The deep-mode early-exit avoids re-firing reviewers on an unchanged HEAD when there's nothing left to fix. Deferred and dismissed findings don't justify another iteration; if you want a second opinion on a defer/dismiss decision, that's what the final `/deepgrill` is for.
+
+---
+
+## Phase 5.5: Final `/deepgrill` (deep mode only)
+
+**Deep mode only.** Lean mode skips this step and goes straight to Phase 6.
+
+Invoke via the Skill tool: `Skill(skill="deepgrill")`.
+
+`/deepgrill` runs `/refactorpass` + `/grill deep` — the full agent matrix (`code-reviewer`, `silent-failure-hunter`, `type-design-analyzer`, `comment-analyzer`, `pr-test-analyzer`, `security-review`). Fresh agents in a separate sub-skill context look at the PR's current state on top of whatever the Gemini+Copilot loop landed. This is the deep-mode replacement for the older Phase 1 `/review` fire — moving the fresh-agent pass _outside_ the polling loop avoids the orchestration trap where `/review`'s self-contained prompt caused control to exit the polling loop early.
+
+> ⚠️ **Do not stop after `/deepgrill` returns.** When control returns from the Skill tool, treat the output as **Phase 5.5's deliverable** and immediately proceed to Phase 6. Do not summarize, do not hand back to the user mid-skill, do not assume the workflow is done. `/reviewit` owns the final summary.
+
+If `/deepgrill` surfaces findings the developer wants to act on, they're handled interactively per `/grill`'s standard Phase 4 verification flow — fix locally, then push. Those follow-up commits are **not** automatically re-routed back through Gemini+Copilot; the developer can re-run `/reviewit <pr>` (lean) on the follow-up commits if they want bot eyes on them.
+
+Capture for the Phase 6 summary:
+
+- whether `/deepgrill` ran (always "yes" in deep mode, "skipped (lean)" otherwise),
+- whether `/refactorpass` produced a commit,
+- the count of `/grill deep` findings the user chose `fix` / `defer` / `ignore` on, if the sub-skill returned that summary.
+
+If `/deepgrill` fails or is interrupted, record the failure in the Phase 6 summary and continue — the Gemini+Copilot loop result is still valid. Do not auto-retry.
 
 ---
 
@@ -469,7 +477,7 @@ After each iteration:
 ✅ /reviewit complete on PR #<pr-number>  (mode: <lean | deep>)
 
 Iterations: <N> of <MAX_ITERS> max
-Final state: <clean | iteration-cap-reached | reviewer-timeout>
+Final state: <clean | early-exit (no fixes in last iter) | iteration-cap-reached | reviewer-timeout>
 
 Findings addressed:
 - Fixed: <count>
@@ -477,15 +485,19 @@ Findings addressed:
 - Dismissed: <count>
 
 Replies posted: <count> of <total reply targets>
-- Reply targets = inline rows (copilot / gemini-inline / review with non-null finding_id) + gemini-summary rows. Excludes /review in-session-only findings.
+- Reply targets = inline rows (copilot / gemini-inline) + gemini-summary rows.
 - Failed to post: <count> — manual follow-up required on: <comma-joined finding ids or summary-row indices>
 
 Reviewer breakdown:
-- /review: <skipped (lean) | total findings, X unique>
 - Gemini Flash: <total findings, X unique>
 - Copilot: <total findings, X unique>
 
 Commits pushed: <list>
+
+Final /deepgrill (deep mode only):
+- Status: <ran | failed: reason | skipped (lean)>
+- /refactorpass commit: <sha or "none">
+- /grill deep findings: <fix count> fixed, <defer count> deferred, <ignore count> ignored
 
 Next: review the diff and merge when ready.
 ```
@@ -495,15 +507,23 @@ If iteration cap was hit in **lean mode**:
 ```
 ⚠️  Hit 2-iteration lean cap. Residual findings remain — review the latest
     reviewer comments and either fix manually, merge as-is, or escalate with
-    /reviewit <pr> deep for the full 3-reviewer 4-iter chain.
+    /reviewit <pr> deep for the 4-iter chain + final /deepgrill.
 ```
 
 If iteration cap was hit in **deep mode**:
 
 ```
-⚠️  Hit 4-iteration deep cap. Residual findings remain — review the latest
-    reviewer comments and either fix manually or merge with explicit
-    acknowledgment that these findings are accepted as-is.
+⚠️  Hit 4-iteration deep cap. Residual findings remain — the final /deepgrill
+    still ran on the cap-state PR, so review its output alongside the open
+    Gemini/Copilot threads before merging.
+```
+
+If deep mode early-exited on no-fixes:
+
+```
+ℹ️  Deep loop early-exited after iteration <N> (no fix resolutions in last
+    iter — all findings were defer/dismiss). Final /deepgrill ran on the
+    converged PR state.
 ```
 
 If a reviewer timed out:
@@ -520,6 +540,7 @@ If a reviewer timed out:
 - **One reviewer never responds**: proceed after timeout. Note in summary.
 - **PR closed mid-cycle**: stop immediately, do not commit.
 - **Force-push needed** (e.g., to amend a fix that broke something): use `--force-with-lease` to avoid clobbering.
+- **`/deepgrill` fails or is interrupted in Phase 5.5**: record the failure in the Phase 6 summary; do not retry automatically. The Gemini+Copilot loop result is still valid — `/deepgrill` is additive.
 
 ---
 

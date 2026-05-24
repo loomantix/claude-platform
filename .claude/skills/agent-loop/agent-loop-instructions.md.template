@@ -36,6 +36,7 @@ TODO: customize for this repo's conventions. Common conventions to keep or remov
 - **Annotated tags** if used: `git tag -a -m "..."`.
 - **PR base branch**: TODO (often `main`; some repos use `staging` or another).
 - **Heredocs in `gh` commands cause permission prompts** — write multiline bodies to a temp file first, then `gh pr create --body-file <path>`.
+- **Never `git stash` with uncommitted edits or mid-merge — it silently drops your work.** `git stash` during an active merge aborts the merge (drops `MERGE_HEAD`, clears conflict markers); a plain stash to "just check something" can lose edits you forget to pop. To peek at another revision's file use `git show <ref>:<path>`; to drop unrelated formatter churn use `git checkout -- <paths>` on the specific files, not stash.
 
 ## What NOT to edit
 
@@ -57,7 +58,7 @@ If your issue requires changing any of these, **stop and post a comment on the i
 
 ## Out-of-scope guardrails
 
-If you discover any of these mid-issue, **stop, comment on the issue with what you found, and exit without a PR**:
+If you discover any of these mid-issue, **stop, comment on the issue, classify the bail (see _§ Continuous improvement — classify every bail_ below), and exit without a PR**:
 
 - **Issue title starts with `Epic:`, contains `extractable as @`, or otherwise reads as cross-repo coordination work.** Epics are not bounded implementation tasks — they're tracking issues. Past agent-loop runs have wasted budget reading an entire epic body before bailing; bail at the title.
 - The issue requires touching another repository (cross-repo coordination).
@@ -66,6 +67,35 @@ If you discover any of these mid-issue, **stop, comment on the issue with what y
 - The issue requires deleting org-level secrets, modifying branch protection, or installing GitHub Apps — these have organization-wide blast radius and need human verification.
 - Acceptance criteria can't be satisfied without changing the synced surfaces listed above.
 - **Your branch's diff vs current `origin/main` shows large DELETIONS in files you didn't author.** This is the stacked-PR-revert trap: a sibling iteration's PR merged to `main` mid-loop, and your branch's baseline now predates it, so opening this PR would _revert_ the sibling's work. Comment on the issue noting the sibling-merge race and exit — the human can re-run after the dust settles.
+
+## Continuous improvement — classify every bail
+
+This loop pairs with the **`/backlog-refinement`** skill to form a learning system: refinement curates the `dev: agent` queue you pull from, and **every bail teaches the system where the backlog or the loop fell short.** The shared rubric is `.claude/skills/backlog-refinement/RUBRIC.md` (§3 lists the `agent-bail:` taxonomy; §4 is this protocol). So when you exit _without a PR_, do not just comment and leave — before exiting:
+
+1. **Pick the dominant `agent-bail:` category** for why you're bailing (one label; mention any secondary reasons in your comment):
+   - `agent-bail: stale` — the described work already shipped / the issue is out of date vs the integration branch HEAD.
+   - `agent-bail: spec-gap` — under-specified; you can't determine done-ness.
+   - `agent-bail: cross-repo` — needs another repo / an unpublished or private dependency / an unmerged upstream change.
+   - `agent-bail: open-decision` — unresolved design/product/policy question; a human must decide.
+   - `agent-bail: credential-gate` — requires a gated build / credential / secret / ruleset access.
+   - `agent-bail: synced-surface` — acceptance requires editing a synced-from-upstream file (belongs upstream).
+   - `agent-bail: epic` — tracking/coordination issue, not a bounded task.
+   - `agent-bail: loop-mechanics` — the issue _was_ agent-shaped but the run hit an avoidable mechanical failure (sibling-revert race, tooling/env gap, prompt ambiguity, transient infra).
+   - _(plus any repo-specific sensitive-path category your `RUBRIC.md` §3 defines — e.g. a "needs human review" label for compliance/security-critical paths.)_
+2. **Relabel:** `gh issue edit <N> --add-label "agent-bail: <category>" --add-label "agent: refined" --remove-label "dev: agent"`. (Removing `dev: agent` stops the loop re-picking it; the removal is itself a high-signal RCA trigger — it means refinement passed something the loop couldn't finish.)
+3. **End your issue comment with the RCA stub** so the post-run `/backlog-refinement rca` pass can aggregate it. Answer the two questions honestly — _what could have made automation succeed here_, and if nothing, _what shape should refinement learn to exclude_:
+
+   ```
+   <!-- agent-loop-rca
+   category: <agent-bail category>
+   bucket: A|B
+   preventable: yes|no
+   what-could-differ: <one line — the answer, or "nothing: inherent">
+   rubric-impact: <which RUBRIC §2 transformation or §3 disqualifier this sharpens>
+   -->
+   ```
+
+Bucket **A** (`stale` / `spec-gap` / `loop-mechanics`) = preventable; a bail here means refinement or the loop should have caught it. Bucket **B** (the rest) = inherent; the issue is correctly not agent-shaped. Be honest about which — a `stale` mislabeled as `cross-repo` hides a refinement miss. (If `/backlog-refinement` isn't installed in this repo, still comment and exit; just skip the relabel.)
 
 ## Pre-push checks
 
@@ -133,3 +163,7 @@ Closes #<N>
 **PR title honesty.** The title must match the BIGGEST scope item in the diff, not just your assigned issue. If the diff carries an unrelated change from a prior iteration alongside your issue's work, prefer a neutral title (`chore: agent-loop iteration N — <areas>`) or a multi-area conventional commit (`feat(backend,mobile): …`). A title that lies about scope wastes reviewer time and almost always triggers AI-reviewer findings about "PR description focuses on X but introduces Y."
 
 **Do not run `/reviewit` yourself.** The human will trigger `/reviewit <pr-number>` on whichever PR they want reviewed (usually the summary PR for a bundled run, not the per-issue PRs).
+
+## Operator note — the end-of-run summary PR base
+
+The loop's collection branch and the end-of-run summary PR are both cut against the repo's auto-detected default branch (`git symbolic-ref refs/remotes/origin/HEAD`). **If your repo's default branch is _not_ the branch `/agent-loop` per-issue PRs target** (e.g. a repo whose integration branch is `staging` but whose default branch is `main`), the summary PR's diff will be dominated by whatever is unmerged between those two branches — not the loop's work — and merging it would bypass your normal promotion flow. In that case treat the summary PR as a roll-up _view_, and **merge the per-issue PRs** (against your integration branch) as the real unit. If this bites you, that's a `loop-mechanics` learning for `.claude/skills/backlog-refinement/LEARNINGS.md` — and a candidate fix is to make the collection-branch / summary-PR base configurable in the loop script.

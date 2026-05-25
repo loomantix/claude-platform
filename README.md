@@ -91,6 +91,23 @@ See [`docs/getting-started.md`](docs/getting-started.md) for the full walkthroug
 
 The skills assume you're using a specific review chain (lean by default, deep for high-risk changes; pre-push `/grill` + post-push `/reviewit`; manual-only Gemini and Copilot). That chain is documented in [`.claude/REVIEW_WORKFLOW.md`](.claude/REVIEW_WORKFLOW.md). If you adopt the skills, adopting the chain too is the path of least friction. If you want a different chain, fork — the skills are small and the orchestration is explicit.
 
+### Why the pre-push chain is two separate passes, in order
+
+`/refactorpass` and `/grill` look like a cheap-filter-then-expensive-filter funnel — clean up the easy stuff first so the costly agents have less to do. They aren't, and understanding why explains the ordering.
+
+The two passes have **orthogonal jobs**:
+
+- `/refactorpass` (wrapping `/simplify`) is **constructive** — DRY, readability, dead-code removal, extracting repeated blocks. It changes the _shape_ of the code.
+- `/grill` is **adversarial** — logic bugs, swallowed errors, type-design holes, missing test coverage. It hunts for _defects_.
+
+Because they look for different categories of thing, the overlap is thin: tidying duplication doesn't make `silent-failure-hunter` cheaper or stop `code-reviewer` from finding a real bug. So running `/refactorpass` first is **not** a cost-saving pre-filter — the grill agents reason over the whole diff regardless of how clean it is, and their cost is dominated by agent reasoning, not diff size. The real payoff is landing the code in its final shape _before_ anything — adversarial agent, bot reviewer, or human — scrutinizes it.
+
+That payoff is also why the two run **sequentially rather than in parallel**, despite the thin overlap. `/simplify` is a writer; `/grill` is a reader of what it wrote. Run them concurrently and grill anchors findings to `file:line` locations that simplify is actively rewriting — you get stale references, findings about code that's about to be deleted, and an adversarial pass critiquing a shape that won't ship. You want grill (and the reviewers after it) to scrutinize the code as it will actually merge.
+
+The mental model: **orthogonal in what they look for, sequentially dependent in that one rewrites what the other reads.** `/deepgrill` bakes the ordering in — it runs `/refactorpass` then `/grill deep` as a single chain. For the full operational walkthrough and the post-push half (`/reviewit`), see [`.claude/REVIEW_WORKFLOW.md`](.claude/REVIEW_WORKFLOW.md).
+
+### The sync engine
+
 The sync engine is intentionally minimal:
 
 - One upstream, one downstream repo, one manifest.

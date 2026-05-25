@@ -1,0 +1,144 @@
+# Agent-readiness rubric
+
+> **Versioned, reviewed criteria** for deciding whether a GitHub issue is _agent-intelligible_ — i.e. completable end-to-end by an autonomous `claude --print` session inside `/agent-loop` without a human in the loop. This file is the single source of truth that both **`/backlog-refinement`** (which prepares the backlog) and **`/agent-loop`** (which consumes it) read. Every entry in [`LEARNINGS.md`](./LEARNINGS.md) either sharpens a _make-ready transformation_ or adds/tightens a _disqualifier_ here.
+>
+> **This file was bootstrapped from a starter template** and is consumer-owned (`create_if_missing: true` — later upstream edits don't overwrite it). **Customize the `TODO:` markers below for your repo**, especially §3's repo-specific sensitive-path disqualifier.
+>
+> **Rubric version: 1** — bump on every material change; record the bump in `LEARNINGS.md`.
+
+## The two questions (the continuous-improvement contract)
+
+When an iteration **bails without a PR** or a PR **fails for a non-code reason**, the RCA asks exactly two questions, in order:
+
+1. **"What could we have done differently to make automation succeed _on this issue_?"**
+   If there is an answer — the issue _was_ doable and prep or the loop failed for an avoidable reason — the fix is a **make-ready transformation** (this rubric's §2) or a **loop fix** (`agent-loop-instructions.md`). The issue can re-enter the queue once fixed. → outcome **PREVENTABLE**.
+
+2. **If the honest answer is "nothing" — the issue is inherently not agent-completable as written —** the follow-up is: **"How do we hone the rubric so an issue of this _shape_ is recognized and excluded at refinement time, before it ever costs a loop iteration?"** The fix is a sharpened **disqualifier** (this rubric's §3). → outcome **INHERENT**.
+
+Every RCA terminates in one concrete edit: a §2 transformation, a §3 disqualifier, or a line in `agent-loop-instructions.md`. An RCA that ends with no edit is incomplete.
+
+## Label model (machine-readable taxonomy)
+
+Three states, queryable from the issue tracker:
+
+| Label | Meaning | Who sets it |
+| --- | --- | --- |
+| `dev: agent` | **Ready for the loop.** The loop's pickup signal — `ready.py --agent` keys on it. | `/backlog-refinement` after a passing assessment |
+| `agent: refined` | Refinement has assessed this issue (whether it ended ready or excluded). Prevents re-processing churn; lets us measure backlog coverage. | `/backlog-refinement` on every issue it touches |
+| `agent-bail: <category>` | **Assessed and excluded**, with a reason from the taxonomy below. | `/backlog-refinement` at refinement time, **or** the inner loop agent at bail time (see §4) |
+
+`dev: agent` and `agent-bail: *` are mutually exclusive. A `dev: agent` issue that the loop later bails on gets `dev: agent` **removed** and the `agent-bail:` reason added — _that removal is itself a high-signal RCA trigger_ (refinement passed something the loop couldn't finish).
+
+Create the labels once per repo:
+
+```bash
+gh label create "agent: refined"          --description "Backlog-refinement has assessed this issue for agent-readiness" --color 0E8A16
+gh label create "agent-bail: stale"          --color FBCA04 --description "Bail: work already shipped / out of date (bucket A)"
+gh label create "agent-bail: spec-gap"        --color FBCA04 --description "Bail: under-specified, can't determine done-ness (bucket A)"
+gh label create "agent-bail: loop-mechanics"  --color FBCA04 --description "Bail: agent-shaped but avoidable loop/tooling failure (bucket A)"
+gh label create "agent-bail: cross-repo"      --color B60205 --description "Bail: needs another repo / unpublished dep / upstream change (bucket B)"
+gh label create "agent-bail: open-decision"   --color B60205 --description "Bail: unresolved design/product/policy question (bucket B)"
+gh label create "agent-bail: credential-gate" --color B60205 --description "Bail: requires gated build/credential/secret/ruleset access (bucket B)"
+gh label create "agent-bail: synced-surface"  --color B60205 --description "Bail: requires editing synced-from-upstream files (bucket B)"
+gh label create "agent-bail: epic"            --color B60205 --description "Bail: tracking/coordination issue, not a bounded task (bucket B)"
+# TODO: add your repo-specific sensitive-path bail label, e.g.:
+# gh label create "agent-bail: needs-human-review" --color B60205 --description "Bail: change to a compliance-sensitive path needing human review (bucket B)"
+```
+
+## §1 — What makes an issue agent-intelligible
+
+An issue is `dev: agent`-ready only if **all** of these hold. `/backlog-refinement` must verify each before tagging.
+
+1. **Bounded scope** — one coherent change, touching only a small number of packages/modules. Not an epic, not "and also."
+2. **Verifiable success** — acceptance is checkable by a deterministic signal the agent can run: a test, a typecheck, a doc/lint gate, a CI gate, or an observable behavior. "Looks better" is not verifiable.
+3. **Self-contained in this repo** — no dependency on an unpublished/private package, an unmerged upstream PR, or a change in a sibling repo. (See `cross-repo` disqualifier.)
+4. **No open decision** — the issue states _what_ to do, not "should we A or B?". Product/design/policy forks are human calls.
+5. **Current** — the described problem still reproduces against the integration branch HEAD; the fix is not already shipped. **This is the most-violated criterion** — see `stale` and the verify-against-HEAD transformation.
+6. **File-anchored** — the body points at the concrete files/symbols/lines where the work happens (refinement adds these if missing).
+7. **Inside the safe envelope** — does not require editing synced-from-upstream files, a credential-gated build, secret/ruleset mutation, or a non-trivial change to a repo-specific sensitive path (see §3 — `TODO:` define yours).
+
+## §2 — Make-ready transformations (PREVENTABLE fixes)
+
+When an issue is _shaped_ like agent work but fails §1, refinement transforms it rather than excluding it. The canonical agent-ready body template is in §5.
+
+| Transformation | Trigger | Action |
+| --- | --- | --- |
+| **Verify-against-HEAD** _(highest-value in practice)_ | Always, before tagging | Check the described bug/behavior against the integration branch. If already fixed → recommend close (`agent-bail: stale`), do **not** tag. If partially shipped → re-scope the body to the **residual** and re-assess that. |
+| **External-dep availability check** | Issue names a package/service dependency | Confirm the dep is published & consumable from this repo. If not → `status: blocked` + `agent-bail: cross-repo`, don't tag. |
+| **Add acceptance criteria** | §1.2 fails | Derive a concrete verifiable check (which test file, which command, which observable). |
+| **Add file pointers** | §1.6 fails | Grep the repo, list the files/symbols the agent will touch. |
+| **Add out-of-scope guardrails** | Scope is fuzzy at the edges | Explicitly list what's _not_ in scope so the agent doesn't wander. |
+| **Split** | §1.1 fails (multi-change) | Propose child issues; tag only the bounded ones. Parent gets `agent-bail: epic`. |
+
+## §3 — Disqualifiers (INHERENT — exclude, never tag `dev: agent`)
+
+Each maps to an `agent-bail:` label. Refinement applies these at prep time; the loop applies them at bail time. Categories are split by which knob the RCA turns.
+
+### Bucket A — preventable-by-prep (a loop bail here means **refinement missed something** → improve §2)
+
+- **`agent-bail: stale`** — work already shipped, or the issue is out of date vs HEAD. _Refinement should have caught this via verify-against-HEAD._ Recommend close.
+- **`agent-bail: spec-gap`** — under-specified; the agent can't determine done-ness. _Refinement should have added acceptance criteria/file pointers, or excluded it if the gap needs human product knowledge._
+- **`agent-bail: loop-mechanics`** — issue _was_ agent-shaped but the run hit an avoidable mechanical failure (sibling-revert race, env/tooling gap, prompt ambiguity, transient infra). _Fix lives in `agent-loop-instructions.md` / `prompt.txt` / the upstream script, not the rubric._
+
+### Bucket B — inherent (genuinely not agent-completable as written → these are correct exclusions)
+
+- **`agent-bail: cross-repo`** — needs another repository, an unpublished/private dep, or an unmerged upstream change.
+- **`agent-bail: open-decision`** — unresolved design/product/policy question; a human must decide direction.
+- **`agent-bail: credential-gate`** — requires a credential-gated build or action (mobile store submissions, a physical device, secret/ruleset/key mutation).
+- **`agent-bail: synced-surface`** — acceptance requires editing a file synced from upstream; the change belongs upstream.
+- **`agent-bail: epic`** — a tracking/coordination issue (`Epic:` title, `extractable as @`, cross-repo orchestration), not a bounded task.
+- **`TODO: agent-bail: <repo-sensitive>`** — define a disqualifier for your repo's sensitive paths that need human review even with green CI. _Examples: a regulated repo excludes non-trivial changes to PHI/PII/encryption/audit-logging paths; a payments repo excludes ledger/settlement code; an infra repo excludes anything touching production IAM. A one-line typo fix in such a path may be OK; anything that touches the core invariant is not._
+
+## §4 — Bail-time self-classification (loop side)
+
+When an `/agent-loop` iteration exits **without a PR**, the inner agent must, before exiting:
+
+1. Pick the **dominant** `agent-bail:` category from §3 (one label; note secondary reasons in the comment).
+2. `gh issue edit <N> --add-label "agent-bail: <category>" --remove-label "dev: agent"` and apply `agent: refined`.
+3. End its issue comment with a structured RCA stub the aggregation pass parses:
+
+   ```
+   <!-- agent-loop-rca
+   category: <agent-bail category>
+   bucket: A|B
+   preventable: yes|no
+   what-could-differ: <one line — the §1/§2 answer, or "nothing: inherent">
+   rubric-impact: <which §2 transformation or §3 disqualifier this sharpens>
+   -->
+   ```
+
+This is the freshest-context capture; the post-run aggregation (§ below) turns these stubs into `LEARNINGS.md` entries and rubric edits.
+
+## §5 — Agent-ready issue-body template (auto-rewrite target)
+
+```markdown
+> **Refined for agent-loop** (rubric v<N>, <date>). Original report preserved below.
+
+## Goal
+<one sentence: the change>
+
+## Acceptance criteria
+- [ ] <deterministic, agent-runnable check>
+- [ ] <typecheck / lint clean>
+- [ ] <relevant tests green>
+
+## Files / entry points
+- `path/to/file:LINE` — <what changes>
+
+## Out of scope
+- <explicit non-goals so the agent doesn't wander>
+
+---
+> ### Original report
+> <verbatim original body>
+```
+
+## Aggregation pass (post-run RCA → rubric evolution)
+
+`/backlog-refinement rca` (run after each loop) reads the run's `agent-bail:*`-labeled issues and their RCA stubs via `scripts/bail-report.py`, then:
+
+1. Groups bails by category; flags any **Bucket A** bail as a refinement miss (what should §2 have caught?).
+2. For repeated Bucket B shapes, proposes a sharpened §3 disqualifier so refinement excludes them earlier.
+3. Appends a dated entry to `LEARNINGS.md` and, if criteria changed, **bumps the rubric version** at the top of this file.
+
+The loop is closed: refinement feeds the queue → the loop consumes it → bails feed RCA → RCA sharpens this rubric → the next refinement pass is smarter.

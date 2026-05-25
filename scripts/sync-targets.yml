@@ -84,6 +84,40 @@ targets:
     substitutions: []
     create_if_missing: true
 
+  # /backlog-refinement — curates the `dev: agent` queue that /agent-loop
+  # consumes, and runs the post-loop RCA that sharpens the rubric from every
+  # bail. SKILL.md + scripts are verbatim (overwrite); RUBRIC.md and
+  # LEARNINGS.md are consumer-owned (bootstrapped from templates, then each
+  # repo customizes the disqualifiers and accumulates its own learnings).
+  - source: .claude/skills/backlog-refinement/SKILL.md
+    destination: .claude/skills/backlog-refinement/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/backlog-refinement/scripts/candidates.py
+    destination: .claude/skills/backlog-refinement/scripts/candidates.py
+    substitutions: []
+    mode: '0755'
+
+  - source: .claude/skills/backlog-refinement/scripts/bail-report.py
+    destination: .claude/skills/backlog-refinement/scripts/bail-report.py
+    substitutions: []
+    mode: '0755'
+
+  # The agent-readiness rubric (criteria + disqualifier taxonomy) is the
+  # source of truth shared with /agent-loop. `create_if_missing: true` lets
+  # each repo tune its §3 disqualifiers (e.g. a repo-specific sensitive-path
+  # exclusion) without upstream clobbering them.
+  - source: .claude/skills/backlog-refinement/RUBRIC.md.template
+    destination: .claude/skills/backlog-refinement/RUBRIC.md
+    substitutions: []
+    create_if_missing: true
+
+  # Append-only RCA log — each repo accumulates its own learnings corpus.
+  - source: .claude/skills/backlog-refinement/LEARNINGS.md.template
+    destination: .claude/skills/backlog-refinement/LEARNINGS.md
+    substitutions: []
+    create_if_missing: true
+
   # Custom Claude Code agents that the synced skills depend on. /feature-dev
   # invokes code-explorer, code-architect, and code-reviewer. Without these
   # in each consumer's .claude/agents/, those skills fail with "agent not found".

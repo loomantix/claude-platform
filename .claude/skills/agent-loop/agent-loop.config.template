@@ -1,0 +1,24 @@
+# agent-loop.config — consumer-owned overrides for /agent-loop.
+#
+# Bootstrapped from a starter template on first sync; later upstream edits
+# don't overwrite it (create_if_missing). Edit freely. Format is simple
+# `key = value` lines (the loop script reads specific keys, not `source`d).
+#
+# ─────────────────────────────────────────────────────────────────────────
+# base_branch
+#   The branch the loop builds its collection branch ON and targets the
+#   end-of-run summary PR AGAINST. Leave it unset (commented out) to
+#   auto-detect the repo's default branch via origin/HEAD — correct for
+#   most repos.
+#
+#   Set it when your INTEGRATION branch differs from your DEFAULT branch —
+#   e.g. a staging→main promotion flow where per-issue PRs target `staging`
+#   but the GitHub default branch is `main`. Without this, the collection
+#   branch is cut off `main` and the summary PR targets `main`, so its diff
+#   is dominated by unpromoted backlog rather than the loop's work — and
+#   merging it bypasses your promotion flow.
+#
+#   A one-off override is also available without editing this file:
+#     AGENT_LOOP_BASE_BRANCH=staging .claude/skills/agent-loop/scripts/agent-loop.sh
+#
+# base_branch = staging

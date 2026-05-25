@@ -162,7 +162,22 @@ if [ ! -f "$PROJECT_DIR/agent-loop-instructions.md" ]; then
     exit 1
 fi
 
-DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+# Base branch the loop builds its collection branch on and targets the
+# end-of-run summary PR against. Precedence: AGENT_LOOP_BASE_BRANCH env var,
+# then `base_branch = <name>` in the consumer-owned agent-loop.config, then
+# the repo's default branch (origin/HEAD). Set base_branch when your
+# integration branch differs from the default branch (e.g. a staging->main
+# promotion flow) so the collection branch + summary PR don't target the
+# wrong base and drown the summary diff in unpromoted backlog.
+AGENT_LOOP_CONFIG="$PROJECT_DIR/.claude/skills/agent-loop/agent-loop.config"
+CONFIG_BASE_BRANCH=""
+if [ -f "$AGENT_LOOP_CONFIG" ]; then
+    CONFIG_BASE_BRANCH=$(sed -n 's/^[[:space:]]*base_branch[[:space:]]*=[[:space:]]*//p' "$AGENT_LOOP_CONFIG" | tail -1 | tr -d '[:space:]')
+fi
+DEFAULT_BRANCH="${AGENT_LOOP_BASE_BRANCH:-$CONFIG_BASE_BRANCH}"
+if [ -z "$DEFAULT_BRANCH" ]; then
+    DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+fi
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 
 REPO_SLUG=$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || echo "unknown/unknown")

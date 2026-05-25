@@ -7,6 +7,14 @@ An issue is "un-refined" when it carries neither `agent: refined` nor any
 are surfaced separately so the operator can see them without them polluting the
 work queue.
 
+A `dev: agent` issue that is ALSO `agent: refined` was tagged by this skill and
+is trusted-ready. But a `dev: agent` issue WITHOUT `agent: refined` was tagged by
+something else — older triage, a bulk import, a parallel pass — and has never been
+verified-against-HEAD. `refine --all` walks only the un-refined bucket, so these
+pre-tagged issues are silently skipped and feed `/agent-loop` stale work. They are
+surfaced as a distinct "re-verify" bucket so the operator re-assesses them (same
+verify-against-HEAD + §1 pass as a fresh refine) before trusting the queue.
+
 Mirrors the gh-invocation conventions of `../../issues/scripts/ready.py`.
 """
 from __future__ import annotations
@@ -46,10 +54,12 @@ def label_names(issue: dict[str, Any]) -> list[str]:
 
 
 def classify(issue: dict[str, Any]) -> str:
-    """One of: ready | excluded | epic | unrefined."""
+    """One of: ready | reverify | excluded | epic | unrefined."""
     labels = label_names(issue)
     if READY_LABEL in labels:
-        return "ready"
+        # dev:agent + refined = this skill tagged it (trusted ready).
+        # dev:agent WITHOUT refined = pre-tagged elsewhere, never verified — re-verify.
+        return "ready" if REFINED_LABEL in labels else "reverify"
     if any(name.startswith(BAIL_PREFIX) for name in labels):
         return "excluded"
     if REFINED_LABEL in labels:
@@ -88,7 +98,7 @@ def main() -> int:
     issues = fetch_open_issues()
 
     buckets: dict[str, list[dict[str, Any]]] = {
-        "unrefined": [], "ready": [], "excluded": [], "epic": [],
+        "unrefined": [], "reverify": [], "ready": [], "excluded": [], "epic": [],
     }
     for issue in issues:
         buckets[classify(issue)].append(issue)
@@ -97,17 +107,19 @@ def main() -> int:
         items.sort(key=lambda i: i["number"])
 
     if args.json:
-        # The work queue is `unrefined` (+ epics for visibility); counts for the rest.
+        # The work queue is `unrefined` + `reverify` (+ epics for visibility); counts for the rest.
         print(json.dumps({
             "counts": {k: len(v) for k, v in buckets.items()},
             "unrefined": buckets["unrefined"][: args.limit],
+            "reverify": buckets["reverify"][: args.limit],
             "epic": buckets["epic"],
         }, indent=2))
         return 0
 
     c = {k: len(v) for k, v in buckets.items()}
     print(
-        f"Open: {len(issues)}  |  ready (dev:agent): {c['ready']}  |  "
+        f"Open: {len(issues)}  |  ready (dev:agent + refined): {c['ready']}  |  "
+        f"RE-VERIFY (dev:agent, NOT refined): {c['reverify']}  |  "
         f"excluded (agent-bail:*): {c['excluded']}  |  epics: {c['epic']}  |  "
         f"UN-REFINED: {c['unrefined']}"
     )
@@ -119,10 +131,12 @@ def main() -> int:
         for issue in rows[: args.limit]:
             print(format_row(issue))
 
+    section("Re-verify — pre-tagged dev:agent, never assessed (do BEFORE trusting the queue)",
+            buckets["reverify"])
     section("Un-refined — refinement queue", buckets["unrefined"])
     section("Epics / coordination (review manually, do not auto-queue)", buckets["epic"])
     if args.include_refined:
-        section("Ready (dev: agent)", buckets["ready"])
+        section("Ready (dev: agent + refined)", buckets["ready"])
         section("Excluded (agent-bail:*)", buckets["excluded"])
     return 0
 

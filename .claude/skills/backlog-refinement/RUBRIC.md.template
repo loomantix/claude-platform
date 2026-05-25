@@ -4,7 +4,7 @@
 >
 > **This file was bootstrapped from a starter template** and is consumer-owned (`create_if_missing: true` — later upstream edits don't overwrite it). **Customize the `TODO:` markers below for your repo**, especially §3's repo-specific sensitive-path disqualifier.
 >
-> **Rubric version: 1** — bump on every material change; record the bump in `LEARNINGS.md`.
+> **Rubric version: 2** — bump on every material change; record the bump in `LEARNINGS.md`. (v2: added the §2 _re-verify pre-tagged queue_ transformation.)
 
 ## The two questions (the continuous-improvement contract)
 
@@ -64,6 +64,7 @@ When an issue is _shaped_ like agent work but fails §1, refinement transforms i
 | Transformation | Trigger | Action |
 | --- | --- | --- |
 | **Verify-against-HEAD** _(highest-value in practice)_ | Always, before tagging | Check the described bug/behavior against the integration branch. If already fixed → recommend close (`agent-bail: stale`), do **not** tag. If partially shipped → re-scope the body to the **residual** and re-assess that. |
+| **Re-verify pre-tagged queue** | A `dev: agent` issue lacks `agent: refined` | It was tagged by something other than this skill (older triage, bulk import, parallel pass) and never verified-against-HEAD. `refine --all` skips it (it's not "un-refined"), yet it's exactly what `/agent-loop` consumes. Run the full per-issue refine over the `candidates.py` **re-verify** bucket _before_ trusting the queue: strip `dev: agent` + add `agent-bail:` on failures, add `agent: refined` on passes. |
 | **External-dep availability check** | Issue names a package/service dependency | Confirm the dep is published & consumable from this repo. If not → `status: blocked` + `agent-bail: cross-repo`, don't tag. |
 | **Add acceptance criteria** | §1.2 fails | Derive a concrete verifiable check (which test file, which command, which observable). |
 | **Add file pointers** | §1.6 fails | Grep the repo, list the files/symbols the agent will touch. |

@@ -33,11 +33,15 @@ python3 .claude/skills/backlog-refinement/scripts/candidates.py
 # --json for machine output, --limit N, --include-refined to also show assessed issues
 ```
 
-Report counts: total open, already `dev: agent`, already `agent-bail:*`, and the un-refined remainder (the work).
+Report counts: total open, already `dev: agent` (split into **ready** = also `agent: refined` vs **re-verify** = `dev: agent` without `agent: refined`), already `agent-bail:*`, and the un-refined remainder (the work).
+
+> **Re-verify bucket.** A `dev: agent` issue lacking `agent: refined` was tagged by something other than this skill (older triage, bulk import, a parallel pass) and has **never been verified-against-HEAD**. `candidates.py` surfaces these separately because `refine --all` walks only the un-refined bucket and silently skips them — leaving stale, pre-tagged work to feed `/agent-loop`. **Clear the re-verify bucket before trusting the queue** (see `refine` below).
 
 ## Mode: `refine [n | --all | --limit N]`
 
 Prepare issues for the loop. Default refines the next un-assessed issue; `--limit N` processes a batch; `--all` walks the whole un-refined backlog. For each issue:
+
+> **Re-verify pre-tagged `dev: agent` FIRST.** `--all` processes only the un-refined bucket — it does **not** touch `dev: agent` issues that lack `agent: refined`. Those are pre-tagged and unverified, and they are exactly what `/agent-loop` consumes, so a plain `refine --all` leaves the loop's real queue stale. Before (or alongside) `refine --all`, run the same per-issue steps below over `gh issue list --label "dev: agent"` filtered to those without `agent: refined` (the `candidates.py` **re-verify** bucket): strip `dev: agent` + add the matching `agent-bail:` on failures, add `agent: refined` on passes. Sanity-check the auto-rewrite on a handful (`assess <n>` or `refine --limit 5`) before a large sweep, since it mutates issue bodies at scale.
 
 1. **Read it fully** — `gh issue view <N>` including comments.
 2. **Early-exit excludes** — if the title/body matches a §3 Bucket-B disqualifier on its face (`Epic:`, `extractable as @`, obvious cross-repo/credential/synced-surface/repo-sensitive), apply `agent: refined` + the `agent-bail:` label, add a one-line comment citing the rubric clause, and move on. Don't over-invest in clearly-excluded issues.

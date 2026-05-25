@@ -62,6 +62,29 @@ The chain is recommended on every source-code PR but not enforced — there's no
 
 ---
 
+## Why the pre-push chain is two passes, in this order
+
+A common misread of the pre-push chain is that `/refactorpass` is a cheap pre-filter that reduces the work the expensive `/grill` agents have to do — clean up the easy stuff so the costly pass has less to chew on. That model is wrong, and the ordering only makes sense once you discard it.
+
+**The two passes have orthogonal jobs.**
+
+- `/refactorpass` (wrapping `/simplify`) is _constructive_. It looks for consolidation and simplification: DRY violations, dead code, repeated blocks worth extracting, unclear names. It rewrites the _shape_ of the code and commits the result.
+- `/grill` is _adversarial_. Its agents look for defects: `code-reviewer` for convention and logic bugs, `silent-failure-hunter` for swallowed errors and fallback that masks failures, and in deep mode `type-design-analyzer`, `comment-analyzer`, `pr-test-analyzer`, and `/security-review` for their respective failure classes. It finds what's _wrong_, not what's _messy_.
+
+**Because the jobs are orthogonal, the finding-overlap is thin — and that means `/refactorpass` is not a cost-saving filter.** Tidying duplication doesn't make `silent-failure-hunter` cheaper, and it doesn't stop `code-reviewer` from finding a real bug. The grill agents reason over the whole diff regardless of how clean it is; their cost is dominated by agent reasoning, not by diff size, so a tidier diff barely moves the bill. The only genuine overlap is `code-reviewer` occasionally flagging duplication or dead code that `/simplify` would have already removed — a thin slice. The real payoff of running `/refactorpass` first is not cheaper grilling; it's that the adversarial pass — and the bot and human reviewers after it — examine the code in the shape it will actually ship in, instead of a shape that's about to change.
+
+**That payoff is also why the two run sequentially rather than in parallel.** Given the thin overlap, parallelizing them to save wall-clock looks tempting. It doesn't work, because the passes aren't independent operations even though their concerns are: `/simplify` is a writer and `/grill` is a reader of what it wrote. Run them concurrently and:
+
+- grill anchors each finding to a `file:line` location that `/simplify` is actively rewriting — so by the time you act on "bug at `foo.ts:42`", that code may have moved into a helper and the anchor points at nothing;
+- the thin overlap flips from "deduped for free" to pure waste — you pay an agent to critique a duplicated block one moment before `/simplify` deletes it;
+- and, most importantly, grill ends up critiquing a shape that won't ship instead of the post-refactor shape that will.
+
+There _is_ a defensible partial-parallel design: the grill agents that provably never touch `/simplify`'s surface — `silent-failure-hunter` on error-handling logic, `pr-test-analyzer` on test files — have low staleness risk and could in principle run against the pre-refactor tree. It's deliberately not done. The orchestration ("these agents in parallel, those after") buys only wall-clock, not token cost — the agents cost the same whichever order they run in — and the pre-push step is human-gated anyway: you verify each grill finding interactively, so a minute saved overlapping the agent runs vanishes against the verification time. Not worth the complexity or the residual staleness risk.
+
+**The mental model:** orthogonal in what they look for, sequentially dependent in that one rewrites what the other reads. `/deepgrill` encodes the ordering directly — it runs `/refactorpass`, then `/grill deep`, as a single chain.
+
+---
+
 ## What about the post-PR enforcement?
 
 There's currently NO hard gate forcing `/reviewit` to be invoked once a PR is open — a session can end with the PR mergeable but unreviewed by AI. The eventual lever is GitHub branch protection requiring an `ai-review-complete` status check that only `/reviewit` can post (with an emergency-label escape hatch). Until that ships, the workflow relies on Claude sessions reading this document and following it. If you're a Claude session: invoke `/reviewit` after every PR creation. If you're a developer reviewing this with a colleague: same expectation.

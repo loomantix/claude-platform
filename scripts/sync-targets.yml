@@ -67,6 +67,15 @@ targets:
     substitutions: []
     mode: '0755'
 
+  # Consumer-owned overrides for the loop (e.g. base_branch for repos whose
+  # integration branch != default branch). `create_if_missing: true` so each
+  # repo customizes it once; the hash-locked agent-loop.sh stays a verbatim
+  # overwrite target and reads this config for its base branch.
+  - source: .claude/skills/agent-loop/agent-loop.config.template
+    destination: .claude/skills/agent-loop/agent-loop.config
+    substitutions: []
+    create_if_missing: true
+
   # /agent-loop expects `agent-loop-instructions.md` at the consumer's repo
   # root. `create_if_missing: true` bootstraps the file from this template
   # on first sync, then leaves it alone — consumer customizations made

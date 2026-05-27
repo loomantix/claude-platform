@@ -50,6 +50,13 @@ targets:
     destination: .claude/skills/reviewit/SKILL.md
     substitutions: []
 
+  # /actions-usage-audit — read-only org Actions-minute cost analysis. Generic
+  # by design; org-specific baselines live in a consumer-owned, non-synced
+  # `.claude/actions-usage-audit.local.md` the skill reads if present.
+  - source: .claude/skills/actions-usage-audit/SKILL.md
+    destination: .claude/skills/actions-usage-audit/SKILL.md
+    substitutions: []
+
   - source: .claude/skills/copilot-review/SKILL.md
     destination: .claude/skills/copilot-review/SKILL.md
     substitutions: []

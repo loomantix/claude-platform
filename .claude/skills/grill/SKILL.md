@@ -17,12 +17,30 @@ Read `$ARGUMENTS`. If it equals `deep` (case-insensitive, ignore surrounding whi
 ## Core principles
 
 - **Adversarial stance.** Unlike `/simplify` (which is constructive — find consolidations and simplifications) and `/refactorpass` (the wrapper that runs `/simplify`), `/grill` is critical. Look for what's wrong, what's missing, what could break, what reviewers will catch.
+- **Fix-everything-valid bias.** The default for every valid finding is **fix now, in this PR**. Dismiss only what's invalid (wrong, false-positive, based on a misread of the diff, or would make the code worse). Defer only when the fix is a major architectural rework — roughly 300+ lines or a cross-cutting redesign — and in that case file a GitHub issue rather than letting it sit as an undocumented todo. The reason: every valid finding that ships becomes the floor for the next PR in this area. Letting them accrue as "deferred" turns the backlog into review noise and makes future grills more expensive.
 - **Skip on docs-only.** Same triviality heuristic as `/refactorpass` and `/reviewit`. Theatre is bad.
-- **User verification is required.** Findings are presented to the user with explicit per-finding choices. The skill does not silently apply fixes or auto-dismiss.
+- **User verification on outcomes, not on whether to act.** Findings are presented and the user confirms the proposed disposition (fix / dismiss-as-invalid / defer-as-architectural-issue). The default offered for each finding is the fix-everything-valid rule above, not a neutral "what do you want to do?"
 
 ---
 
 ## Phase 0: Pre-flight + triviality
+
+### 0a. Context-window check (do this BEFORE anything else)
+
+`/grill` spawns adversarial sub-agents (Agent tool, `pr-review-toolkit:*`). Each sub-agent gets its own prompt-cache state derived from this session's context. If this session has been heavily used for feature implementation — long conversation, lots of file edits, dense planning — the cache is already spent on context the sub-agents don't need, and their effective working window shrinks accordingly. Deep grill is hit hardest: it spawns up to six agents in parallel.
+
+Before proceeding, assess honestly:
+
+- Has this session been writing/editing the feature about to be grilled? Long conversation, many tool calls, dense edit history?
+- Is the conversation about to brush against auto-compaction territory?
+
+If **either is yes**, STOP and tell the user:
+
+> Your context is heavy from the implementation work. Start a new Claude session and run `/grill` (or `/deepgrill`) there — sub-agents need cache headroom, and a fresh session makes the chain materially cheaper. This matters even more for `/deepgrill`, which spawns up to six agents.
+
+Do not proceed in the current session unless the user explicitly overrides.
+
+### 0b. Standard pre-flight + triviality
 
 1. **Triviality detection** (same heuristic as `/refactorpass` Phase 0 step 5):
 
@@ -123,17 +141,25 @@ If zero findings: skip to Phase 5. The user can push.
 
 ## Phase 4: User verification (interactive)
 
-For each finding, ask the user to choose:
+Apply the **fix-everything-valid bias** from Core principles. For each finding, propose a disposition and ask the user to confirm or override:
 
-- **F (fix now)**: Claude applies the fix. The fix becomes a new commit (`fix: address /grill finding N — <summary>`).
-- **D (defer)**: tracked in PR description after push. Claude appends a "Pre-push grill — deferred" section to the PR body when `/reviewit` runs.
-- **I (ignore)**: dismissed as a false positive. **Critical findings cannot be ignored without an explicit one-line rationale** that gets recorded in the commit / PR description.
+- **Default disposition for valid findings: fix now.** Claude applies the fix in this PR as a new commit (`fix: address /grill finding N — <summary>`). This is the default — do not present "defer" as an equally weighted option for ordinary findings.
+- **Dismiss-as-invalid**: propose this only when the finding is wrong, a false positive, based on a misread of the diff, or would make the code worse. Record the dismissal rationale in one line so it's not re-raised in `/reviewit`.
+- **Defer-as-architectural-issue**: propose this only when the fix is a major architectural rework (roughly 300+ lines or a cross-cutting redesign). In that case file a GitHub issue **now** (`gh issue create`) capturing the finding + file/line evidence + rationale, and reference the issue number in the PR body. A "deferred" finding without a filed issue is not allowed — the whole point is to keep the implicit todo backlog from growing.
 
-Process findings one at a time, lowest-numbered first. Do not batch — the user is verifying each.
+For each finding, present it like:
+
+```
+Finding N (severity: …) — apps/foo/bar.ts:42 — silent-failure
+  Proposed: FIX (default for valid findings)
+  [Enter] confirm  ·  [d] dismiss-as-invalid (requires rationale)  ·  [i] defer-as-architectural (requires issue)
+```
+
+Process findings one at a time, lowest-numbered first. Do not batch — the user is verifying each. Override is one keypress; the bias is built into which option is the default, not into removing the user's choice.
 
 After all findings handled, ask:
 
-> "Ready to push? After push and PR creation, run `/reviewit <pr-number>`. [Y/n]"
+> "Ready to push? After push and PR creation, run `/reviewit <pr-number>` (preferably in a fresh Claude session — see Phase 5 handoff). [Y/n]"
 
 If N: stop here. The user takes over (maybe wants to keep iterating manually).
 
@@ -154,6 +180,11 @@ Next:
   gh pr create --title "..." --body "..."
   /reviewit <pr-number>          # lean (Gemini + Copilot, 2 iters)
   /reviewit <pr-number> deep     # deep (Gemini + Copilot, 4 iters w/ early-exit + final /deepgrill)
+
+ℹ️  Run /reviewit in a FRESH Claude session.
+   This session's context has just absorbed the grill output + any fix commits.
+   /reviewit (especially `deep`) drives multiple Gemini/Copilot iterations and a final /deepgrill,
+   each of which benefits from cache headroom. A fresh session for /reviewit is materially cheaper.
 ```
 
 If lean mode was used and the changeset touches load-bearing surfaces (auth, crypto, schema migrations, sync mechanism, sync-propagating files under `.claude/skills/**` or `scripts/sync*`), append:

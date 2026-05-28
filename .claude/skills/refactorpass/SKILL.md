@@ -13,12 +13,30 @@ The skill wraps Claude Code's built-in `/simplify` and adds two things `/simplif
 ## Core principles
 
 - **Refactor freely.** Unlike post-PR review where scope creep is a real cost, here every consolidation lands as a normal commit in the eventual PR's history. Three similar lines → helper. Repeated 5-line block → extracted function. Dead code → deleted.
+- **Fix-everything-valid bias.** Apply every valid simplification `/simplify` surfaces in this pass. Only skip suggestions that are wrong (would change behavior, would make the code worse, are based on a misread of the diff). Do not defer valid cleanups to "a follow-up PR" — the only legitimate defer is a major architectural rework (300+ lines or a cross-cutting redesign), which should be filed as a GitHub issue rather than left as an unwritten todo. Backlog hygiene compounds: a valid nit not fixed now becomes review noise on every future PR in this area.
 - **One pass only.** A second `/simplify` pass on the same changeset has been validated empirically to add negligible value over the first; dropped to keep token cost honest.
 - **Commit the result.** A single `refactor: /simplify pass — ...` commit. Skipped cleanly if `/simplify` made no changes.
 
 ---
 
 ## Phase 0: Pre-flight
+
+### 0a. Context-window check (do this BEFORE anything else)
+
+`/refactorpass` invokes `/simplify`, which reads diffs and proposes (and applies) edits across the changeset. That work needs cache headroom. If the current session has already been heavily used for feature implementation (lots of file reads, edits, long planning conversations), the prompt cache is mostly spent on context that `/simplify` does not need — and worse, `/grill` afterwards spawns sub-agents whose effective working window is what's left.
+
+Before proceeding, assess the session honestly:
+
+- Has this session been writing/editing the feature you're about to refactor? Long conversation, many tool calls, dense edit history?
+- Is the conversation about to brush against auto-compaction territory?
+
+If **either is yes**, STOP and tell the user:
+
+> Your context is heavy from the implementation work. Start a new Claude session and run `/refactorpass` (and `/grill` / `/deepgrill`) there — the sub-agents need cache headroom, and a fresh session makes the chain materially cheaper.
+
+Do not proceed in the current session unless the user explicitly overrides. The "but I want to keep going" override is fine — just surface the recommendation first.
+
+### 0b. Standard pre-flight
 
 1. **Check git state**:
 

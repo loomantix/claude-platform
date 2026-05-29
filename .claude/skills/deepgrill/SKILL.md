@@ -27,6 +27,23 @@ If none of those apply, run the default chain instead — `/deepgrill` is ~3× t
 
 ## Phase 0: Pre-flight
 
+### 0a. Context-window check (do this BEFORE anything else)
+
+`/deepgrill` is the most cache-hungry skill in the chain — it runs `/refactorpass` (`/simplify`) and then `/grill deep` which spawns up to six adversarial sub-agents in parallel. Each sub-agent inherits a slice of this session's prompt-cache state. If the current session has already been heavily used for feature implementation, the sub-agents start with sharply reduced working windows and the whole chain runs slower and more expensively.
+
+Before proceeding, assess honestly:
+
+- Has this session been writing/editing the feature about to be reviewed? Long conversation, many tool calls, dense edit history?
+- Is the conversation about to brush against auto-compaction territory?
+
+If **either is yes**, STOP and tell the user:
+
+> Your context is heavy from the implementation work. Start a new Claude session and run `/deepgrill` there — `/deepgrill` spawns up to six parallel sub-agents and is the chain that benefits most from cache headroom. A fresh session makes the chain materially cheaper.
+
+Do not proceed in the current session unless the user explicitly overrides.
+
+### 0b. Standard pre-flight
+
 1. **Verify on a feature branch** (not `main`/`master`/`staging`). If on a protected branch, refuse and ask the user to `git switch -c feat/...`.
 
 2. **Verify there's something to grill** — `git rev-parse @{u}` matching HEAD with no working-tree diff means nothing local to review. Tell the user, exit cleanly.
@@ -66,6 +83,12 @@ Next steps for the deep chain:
   git push
   gh pr create --title "..." --body "..."
   /reviewit <pr-number> deep    # Gemini + Copilot 4-iter loop with early-exit, then a final /deepgrill on the PR
+
+ℹ️  Run /reviewit deep in a FRESH Claude session.
+   This session's context has absorbed refactorpass output, deep-grill sub-agent findings,
+   and any fix commits — cache pressure is high. /reviewit deep runs up to four review iterations
+   and a final /deepgrill against the PR; each step needs cache headroom. A fresh session for
+   /reviewit deep makes the full chain materially cheaper.
 ```
 
 Do not push or open the PR — the developer takes the final action so they can compose the PR title/body deliberately.

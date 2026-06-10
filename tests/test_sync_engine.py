@@ -180,6 +180,110 @@ def test_substitute_strips_trailing_newlines_from_block_scalar(
 
 
 # ---------------------------------------------------------------------------
+# normalize_rendered_markdown — blank-line stability of template renders
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_collapses_blank_run_left_by_empty_placeholder(
+    sync_engine: ModuleType,
+) -> None:
+    # The motivating case: an empty substitution on its own template line
+    # leaves the blank lines around it stacked — prettier collapses the run,
+    # so the render must too or every sync PR reintroduces it.
+    rendered = sync_engine.substitute(
+        "- last list item\n\n<<EXTRA>>\n\n---\n", {"EXTRA": ""}, ["EXTRA"], "src.md"
+    )
+    out = sync_engine.normalize_rendered_markdown(rendered)
+    assert out == "- last list item\n\n---\n"
+
+
+def test_normalize_treats_whitespace_only_lines_as_blank(
+    sync_engine: ModuleType,
+) -> None:
+    out = sync_engine.normalize_rendered_markdown("a\n \n\t\nb\n")
+    assert out == "a\n\nb\n"
+
+
+def test_normalize_drops_leading_blanks_and_fixes_trailing_newline(
+    sync_engine: ModuleType,
+) -> None:
+    assert sync_engine.normalize_rendered_markdown("\n\na\n\n\n") == "a\n"
+    assert sync_engine.normalize_rendered_markdown("a") == "a\n"
+
+
+def test_normalize_preserves_blank_runs_inside_fences(
+    sync_engine: ModuleType,
+) -> None:
+    text = "intro\n\n```python\nx = 1\n\n\n\ny = 2\n```\n\nafter\n"
+    assert sync_engine.normalize_rendered_markdown(text) == text
+
+
+def test_normalize_fence_closes_only_on_matching_longer_fence(
+    sync_engine: ModuleType,
+) -> None:
+    # A ```` fence is not closed by ``` (shorter) nor by ~~~ (wrong char);
+    # blank runs stay verbatim until the real closing fence.
+    text = "````\n```\n\n\n~~~\n````\n\nafter\n"
+    assert sync_engine.normalize_rendered_markdown(text) == text
+
+
+def test_normalize_keeps_single_blank_before_fence(
+    sync_engine: ModuleType,
+) -> None:
+    out = sync_engine.normalize_rendered_markdown("text\n\n\n```\ncode\n```\n")
+    assert out == "text\n\n```\ncode\n```\n"
+
+
+def test_normalize_is_idempotent(sync_engine: ModuleType) -> None:
+    samples = [
+        "a\n\n\n\nb\n",
+        "text\n\n```\ncode\n\n\nmore\n```\n\n\n---\n",
+        "```\nunclosed fence\n",
+        "",
+    ]
+    for text in samples:
+        once = sync_engine.normalize_rendered_markdown(text)
+        assert sync_engine.normalize_rendered_markdown(once) == once
+
+
+def test_main_normalizes_substituted_md_but_not_verbatim_copies(
+    sync_engine: ModuleType,
+    upstream_repo: Path,
+    consumer_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Substituted .md render: blank-line runs collapse. Verbatim copy
+    # (subs == []): byte-identical even with ugly whitespace — consumers
+    # prettier-ignore vendored files, and an engine rewrite would itself
+    # be churn against the upstream source of truth.
+    ugly = "# Title\n\n\n\nbody\n\n\n"
+    (upstream_repo / "tpl.md").write_text("# <<NAME>>\n\n<<EXTRA>>\n\nbody\n")
+    (upstream_repo / "verbatim.md").write_text(ugly)
+    _write_yaml(
+        upstream_repo / "scripts" / "sync-targets.yml",
+        {
+            "targets": [
+                {
+                    "source": "tpl.md",
+                    "destination": "rendered.md",
+                    "substitutions": ["NAME", "EXTRA"],
+                },
+                {"source": "verbatim.md", "destination": "verbatim.md", "substitutions": []},
+            ]
+        },
+    )
+    _write_yaml(
+        consumer_dir / ".platform-config.yml",
+        {"substitutions": {"NAME": "Repo", "EXTRA": ""}},
+    )
+
+    rc = _run_main(sync_engine, upstream_repo, consumer_dir, monkeypatch)
+    assert rc == 0
+    assert (consumer_dir / "rendered.md").read_text() == "# Repo\n\nbody\n"
+    assert (consumer_dir / "verbatim.md").read_text() == ugly
+
+
+# ---------------------------------------------------------------------------
 # write_if_changed — content + mode divergence
 # ---------------------------------------------------------------------------
 

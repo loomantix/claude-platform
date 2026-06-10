@@ -13,13 +13,21 @@
 # block in place costs nothing and survives a future prettier version
 # bump that changes default behavior.
 #
+# `.github/copilot-instructions.md` IS listed even though it is rendered
+# per-consumer from `.platform-config.yml` values: it is generated content
+# like the rest of the surface, and formatting it locally only fights the
+# next sync render. Cleanliness of the render is enforced upstream (the
+# sync engine normalizes blank-line structure of rendered markdown, and the
+# `render-check` CI job prettier-checks the rendered template); keeping
+# YOUR substitution values prettier-clean is the consumer-side half of
+# that contract (docs/sync.md).
+#
 # Mechanical replacement: keep the `>>> ... <<<` markers intact so this
 # block can be regenerated in place. Anything outside the markers is
 # yours and won't be touched.
 #
 # Regenerate when scripts/sync-targets.yml changes — the entries below
-# mirror its `destination:` paths (excluding `delete: true` entries and
-# entries that are rendered from a template).
+# mirror its `destination:` paths (excluding `delete: true` entries).
 
 # >>> platform-synced paths <<<
 .claude/REVIEW_WORKFLOW.md
@@ -27,8 +35,16 @@
 .claude/agents/code-explorer.md
 .claude/agents/code-reviewer.md
 .claude/settings.json
+.claude/skills/actions-usage-audit/SKILL.md
 .claude/skills/agent-loop/SKILL.md
+.claude/skills/agent-loop/agent-loop.config
+.claude/skills/agent-loop/prompt.txt
 .claude/skills/agent-loop/scripts/agent-loop.sh
+.claude/skills/backlog-refinement/LEARNINGS.md
+.claude/skills/backlog-refinement/RUBRIC.md
+.claude/skills/backlog-refinement/SKILL.md
+.claude/skills/backlog-refinement/scripts/bail-report.py
+.claude/skills/backlog-refinement/scripts/candidates.py
 .claude/skills/copilot-review/SKILL.md
 .claude/skills/deepgrill/SKILL.md
 .claude/skills/feature-dev/SKILL.md
@@ -38,4 +54,7 @@
 .claude/skills/issues/scripts/ready.py
 .claude/skills/refactorpass/SKILL.md
 .claude/skills/reviewit/SKILL.md
+.github/copilot-instructions.md
+.github/workflows/dco.yml
+agent-loop-instructions.md
 # <<< platform-synced paths >>>

@@ -1,0 +1,49 @@
+# Fixture consumer config for the `render-check` job in ci.yml: the engine
+# renders the full sync surface — most importantly
+# `.github/copilot-instructions.md.template` — against this config, and CI
+# asserts the rendered output is clean under the canonical .prettierrc.
+#
+# Values here must be prettier-clean markdown — that's the consumer-side
+# contract (docs/sync.md, "Prettier and synced files").
+#
+# WHAT_NOT_TO_SUGGEST_EXTRA is deliberately empty: an empty substitution on
+# its own template line used to leave a double blank line in the render —
+# the exact churn class this check guards against.
+
+substitutions:
+  PROJECT_NAME: FixtureRepo
+
+  PROJECT_OVERVIEW: |
+    Fixture project used only by the CI render check. The overview spans
+    multiple lines to mirror real consumer configs.
+
+  CANONICAL_DOCS: '`CLAUDE.md` (project guide)'
+
+  STACK_TABLE: |
+    | Layer    | Tech       |
+    | -------- | ---------- |
+    | Language | TypeScript |
+
+    Common mistakes to flag:
+
+    - Reimplementing shared logic that belongs upstream.
+
+  CODE_RULES: |
+    - **Conventional commits** (`feat:`, `fix:`, `docs:`).
+    - **Merge commits** for PR merges.
+
+  DOMAIN_RULES: |
+    ## Domain rules
+
+    - Keep fixture-only content obviously fake.
+
+  REVIEW_FOCUS: |
+    1. **Correctness** — logic errors, edge cases.
+    2. **Security** — secret redaction, injection.
+
+  WHAT_NOT_TO_SUGGEST_EXTRA: ''
+
+# The render check exercises template rendering, not the destination
+# allowlist — accept the full surface.
+allowed_destinations:
+  - '**'

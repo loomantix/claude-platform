@@ -132,9 +132,16 @@ Synced files are formatted upstream with the canonical [`.prettierrc`](../.prett
 Two ways to avoid the drift:
 
 1. **Adopt the canonical config** — copy this repo's `.prettierrc` into your consumer repo (or extend yours from it). Prettier then produces identical output on both sides and there's no drift.
-2. **Exclude synced paths from your prettier run** — paste the marker block from [`recommended-prettierignore.txt`](../recommended-prettierignore.txt) into your consumer's `.prettierignore`. Keep the `>>> platform-synced paths <<<` markers intact so the block can be replaced mechanically when the synced surface changes.
+2. **Exclude synced paths from your prettier run** — paste the marker block from [`recommended-prettierignore.txt`](../recommended-prettierignore.txt) into your consumer's `.prettierignore`. Keep the `>>> platform-synced paths <<<` markers intact so the block can be replaced mechanically when the synced surface changes. Do this **even if you adopt the canonical config** — synced files are vendored content, and your prettier run has nothing to add there.
 
-Regenerate `recommended-prettierignore.txt` whenever `scripts/sync-targets.yml` changes — the snippet mirrors its `destination:` paths.
+Regenerate `recommended-prettierignore.txt` whenever `scripts/sync-targets.yml` changes — the snippet mirrors its `destination:` paths (excluding `delete: true` entries).
+
+### Rendered templates must stay prettier-clean
+
+`.github/copilot-instructions.md` is rendered per-consumer (template + `.platform-config.yml` substitutions), so its cleanliness has two halves:
+
+- **Template half (enforced here).** The engine normalizes the blank-line structure of rendered markdown (`normalize_rendered_markdown` in `sync-engine.py`): an empty substitution value on its own template line would otherwise leave a doubled blank line that prettier collapses — making every consumer's daily sync PR fight the consumer's local format run. The `render-check` CI job renders the full surface against `tests/fixtures/render-check/.platform-config.yml` (which deliberately includes an empty value) and runs `prettier --check` on the result.
+- **Consumer half (your `.platform-config.yml`).** The engine cannot reformat your substitution values — tables, lists, and paragraphs inside them must already be prettier-clean markdown (e.g. a blank line between a paragraph and the list that follows it, aligned table pipes). If a sync PR's diff against your repo is pure whitespace, your values are the first place to look.
 
 ## Adding a new file to the sync surface
 

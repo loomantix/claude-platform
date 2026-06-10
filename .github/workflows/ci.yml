@@ -123,6 +123,44 @@ jobs:
       - name: Prettier --check
         run: npx --yes prettier@3.8.3 --check .
 
+  render-check:
+    # The `format` job checks the TEMPLATE; this job checks what consumers
+    # actually receive. Substitution can break formatting the template
+    # alone can't show (an empty value leaves its surrounding blank lines
+    # stacked), and a non-clean render makes every consumer's daily sync PR
+    # fight the consumer's own prettier run — churn that repeats until one
+    # side yields. Renders the full sync surface against the fixture
+    # consumer config and asserts prettier-cleanliness of the rendered
+    # copilot instructions under the canonical .prettierrc.
+    name: Rendered template prettier check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - run: python3 -m pip install 'pyyaml==6.0.2'
+      - name: Render sync surface against fixture consumer
+        run: |
+          set -euo pipefail
+          CONSUMER=$(mktemp -d)
+          cp tests/fixtures/render-check/.platform-config.yml "$CONSUMER/"
+          python3 scripts/sync-engine.py \
+            --upstream-repo . \
+            --consumer-dir "$CONSUMER"
+          echo "RENDER_DIR=$CONSUMER" >> "$GITHUB_ENV"
+      - name: Prettier --check rendered output
+        run: |
+          set -euo pipefail
+          # Pin the same prettier version as the `format` job. --config is
+          # required: the rendered tree lives outside the repo, so config
+          # discovery would otherwise find nothing and fall back to defaults.
+          npx --yes prettier@3.8.3 --config .prettierrc --check \
+            "$RENDER_DIR/.github/copilot-instructions.md"
+
   skill-content:
     name: Skill content policy
     runs-on: ubuntu-latest

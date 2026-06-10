@@ -228,6 +228,71 @@ def substitute(text: str, values: dict[str, str], target_keys: list[str], source
     return PLACEHOLDER_RE.sub(replace, text)
 
 
+FENCE_RE = re.compile(r"\A {0,3}(`{3,}|~{3,})")
+
+
+def normalize_rendered_markdown(text: str) -> str:
+    """Normalize blank-line structure of a template-rendered markdown file.
+
+    Substituting placeholders can leave blank-line runs the template author
+    never wrote: an empty value on its own template line collapses to nothing,
+    so the blank lines that surrounded the placeholder become consecutive.
+    Prettier's markdown formatter collapses such runs to a single blank line —
+    so a consumer that format-checks the rendered destination sees every sync
+    PR re-introduce the run and every local format run revert it (churn that
+    repeats daily until one side yields).
+
+    Mirror exactly the blank-line subset of prettier's behavior so rendered
+    output is stable under a consumer's `prettier --check`:
+      - collapse runs of 2+ blank lines (whitespace-only counts as blank)
+        into one empty line,
+      - drop leading blank lines,
+      - end the file with exactly one trailing newline.
+
+    Fenced code blocks (``` or ~~~, up to 3 leading spaces, closed by a fence
+    of the same char at least as long — CommonMark rules) pass through
+    verbatim: blank-line runs inside them are content, and prettier leaves
+    them alone too.
+
+    This intentionally reproduces only the blank-line subset of prettier;
+    everything else rendered (tables, lists, emphasis) must already be clean
+    in the template and in consumer substitution values — the template side
+    is enforced by the render check in CI, the value side is the consumer's
+    contract (docs/sync.md).
+    """
+    out: list[str] = []
+    blank_run = 0
+    fence_close: tuple[str, int] | None = None  # (fence char, opening length)
+    # rstrip before splitting: the final "\n" would otherwise yield a
+    # trailing "" element that an unclosed fence at EOF appends verbatim,
+    # growing the file by one line per run (idempotency break on malformed
+    # input). Trailing blank lines are re-normalized by the join below.
+    for line in text.rstrip("\n").split("\n"):
+        fence_match = FENCE_RE.match(line)
+        if fence_close is None and fence_match is not None:
+            marker = fence_match.group(1)
+            fence_close = (marker[0], len(marker))
+        elif fence_close is not None and fence_match is not None:
+            char, length = fence_close
+            marker = fence_match.group(1)
+            if marker[0] == char and len(marker) >= length and not line.strip(marker[0]).strip():
+                fence_close = None
+        if fence_close is not None or fence_match is not None:
+            if blank_run and out:
+                out.append("")
+            blank_run = 0
+            out.append(line)
+            continue
+        if not line.strip():
+            blank_run += 1
+            continue
+        if blank_run and out:
+            out.append("")
+        blank_run = 0
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
 def write_if_changed(path: Path, content: str, mode: int | None) -> bool:
     """Write content to path only if it differs. Return True if a write happened."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -651,6 +716,12 @@ def main() -> int:
         # adds a `<<KEY>>` token to a source file but forgets to declare
         # it in sync-targets.yml.
         substituted = substitute(text, values, subs, source_rel)
+        # Normalize blank-line structure for template-rendered markdown only.
+        # Verbatim copies (subs == []) must stay byte-identical to the
+        # upstream source — consumers prettier-ignore them as vendored
+        # content, and any engine-side rewrite would itself become churn.
+        if subs and dest_rel.endswith(".md"):
+            substituted = normalize_rendered_markdown(substituted)
 
         if args.dry_run:
             existing = dest_path.read_text(encoding="utf-8") if dest_path.is_file() else None

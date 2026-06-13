@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 from typing import Any
@@ -31,6 +33,33 @@ BAIL_PREFIX = "agent-bail:"
 # Surfaced but never auto-queued — these read as coordination, not bounded work.
 EPIC_TITLE_MARKERS = ("epic:", "extractable as @")
 LABEL_PREFIXES_TO_SHOW = ("area:", "dev:", "agent-bail:", "agent:", "status:", "priority:")
+
+# Workflow-auto-managed labels: issues a scheduled workflow both OPENS and
+# CLOSES (e.g. a nightly metrics/digest issue auto-closed after N days). They
+# are never refinement tasks, and a refinement comment on one resets its
+# `updatedAt` — which can DELAY that auto-close. The label list is repo-specific,
+# so it is declared in a marker in the consumer-owned RUBRIC.md rather than
+# hard-coded here (keeps repo config in the rubric, the skill's source of truth):
+#     <!-- auto-managed-labels: label-a, label-b -->
+# Absent or empty marker → no skipping (safe default; pre-existing repos are
+# unaffected until they opt in).
+_AUTO_MANAGED_MARKER = re.compile(r"<!--\s*auto-managed-labels:\s*(.*?)\s*-->")
+
+
+def load_auto_managed_labels() -> tuple[str, ...]:
+    """Repo-specific skip labels, read from the sibling RUBRIC.md marker."""
+    rubric_path = os.path.join(os.path.dirname(__file__), "..", "RUBRIC.md")
+    try:
+        with open(rubric_path, encoding="utf-8") as fh:
+            match = _AUTO_MANAGED_MARKER.search(fh.read())
+    except OSError:
+        return ()
+    if not match:
+        return ()
+    return tuple(label.strip() for label in match.group(1).split(",") if label.strip())
+
+
+AUTO_MANAGED_LABELS = load_auto_managed_labels()
 
 
 def fetch_open_issues() -> list[dict[str, Any]]:
@@ -54,8 +83,11 @@ def label_names(issue: dict[str, Any]) -> list[str]:
 
 
 def classify(issue: dict[str, Any]) -> str:
-    """One of: ready | reverify | excluded | epic | unrefined."""
+    """One of: skipped | ready | reverify | excluded | epic | unrefined."""
     labels = label_names(issue)
+    if AUTO_MANAGED_LABELS and any(name in AUTO_MANAGED_LABELS for name in labels):
+        # Opened AND closed by a scheduled workflow — never a refinement task.
+        return "skipped"
     if READY_LABEL in labels:
         # dev:agent + refined = this skill tagged it (trusted ready).
         # dev:agent WITHOUT refined = pre-tagged elsewhere, never verified — re-verify.
@@ -99,6 +131,7 @@ def main() -> int:
 
     buckets: dict[str, list[dict[str, Any]]] = {
         "unrefined": [], "reverify": [], "ready": [], "excluded": [], "epic": [],
+        "skipped": [],
     }
     for issue in issues:
         buckets[classify(issue)].append(issue)
@@ -121,7 +154,9 @@ def main() -> int:
         f"Open: {len(issues)}  |  ready (dev:agent + refined): {c['ready']}  |  "
         f"RE-VERIFY (dev:agent, NOT refined): {c['reverify']}  |  "
         f"excluded (agent-bail:*): {c['excluded']}  |  epics: {c['epic']}  |  "
-        f"UN-REFINED: {c['unrefined']}"
+        # Only surface the auto-managed skip count when the repo actually uses it.
+        + (f"skipped (auto-managed): {c['skipped']}  |  " if c["skipped"] else "")
+        + f"UN-REFINED: {c['unrefined']}"
     )
 
     def section(title: str, rows: list[dict[str, Any]]) -> None:

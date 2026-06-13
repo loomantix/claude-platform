@@ -90,6 +90,16 @@ Each maps to an `agent-bail:` label. Refinement applies these at prep time; the 
 - **`agent-bail: epic`** — a tracking/coordination issue (`Epic:` title, `extractable as @`, cross-repo orchestration), not a bounded task.
 - **`TODO: agent-bail: <repo-sensitive>`** — define a disqualifier for your repo's sensitive paths that need human review even with green CI. _Examples: a regulated repo excludes non-trivial changes to PHI/PII/encryption/audit-logging paths; a payments repo excludes ledger/settlement code; an infra repo excludes anything touching production IAM. A one-line typo fix in such a path may be OK; anything that touches the core invariant is not._
 
+### Workflow-auto-managed issues (skipped entirely — not even labelled)
+
+Some issues are **opened _and_ closed by a scheduled workflow** — e.g. a nightly metrics/digest issue that the workflow itself auto-closes after N days. These are never engineering tasks, and a refinement comment on one resets its `updatedAt`, which can _delay_ that auto-close. Refinement must leave them alone: `candidates.py` routes any issue carrying an auto-managed label to a `skipped` bucket that never enters the work queue (and isn't counted as un-refined).
+
+The label list is **repo-specific**, so declare it in the marker below (comma-separated). `candidates.py` reads exactly this marker from this file. Leave it empty if your repo has none.
+
+<!-- auto-managed-labels: -->
+
+<!-- ^ Fill in the marker above, e.g. `<!-- auto-managed-labels: nightly-digest, automated-report -->`. Keep it to a single marker line; the script reads the first match. -->
+
 ## §4 — Bail-time self-classification (loop side)
 
 When an `/agent-loop` iteration exits **without a PR**, the inner agent must, before exiting:

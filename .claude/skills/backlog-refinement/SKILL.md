@@ -35,6 +35,8 @@ python3 .claude/skills/backlog-refinement/scripts/candidates.py
 
 Report counts: total open, already `dev: agent` (split into **ready** = also `agent: refined` vs **re-verify** = `dev: agent` without `agent: refined`), already `agent-bail:*`, and the un-refined remainder (the work).
 
+> **Auto-managed skip.** Issues a scheduled workflow both opens and closes (e.g. a nightly metrics/digest issue) are never refinement tasks — and commenting on one resets its `updatedAt`, delaying the workflow's auto-close. Declare their labels in the `<!-- auto-managed-labels: … -->` marker in `RUBRIC.md` (§3); `candidates.py` routes matching issues to a `skipped` bucket that never enters the queue and never counts as un-refined. Empty marker → no skipping.
+
 > **Re-verify bucket.** A `dev: agent` issue lacking `agent: refined` was tagged by something other than this skill (older triage, bulk import, a parallel pass) and has **never been verified-against-HEAD**. `candidates.py` surfaces these separately because `refine --all` walks only the un-refined bucket and silently skips them — leaving stale, pre-tagged work to feed `/agent-loop`. **Clear the re-verify bucket before trusting the queue** (see `refine` below).
 
 ## Mode: `refine [n | --all | --limit N]`

@@ -52,6 +52,7 @@ Exclusion rules:
 
 - Label `status: blocked`
 - Body contains `Blocked by #N` or `Depends on #N` where #N is still open
+- Targeted by a closing reference from an **open** PR, or from a PR **merged in the last 30 days** (via `closingIssuesReferences`, with a closing-keyword body fallback) — keeps issues already fixed as a PR side-item or by an in-review PR out of the queue, including done-on-integration issues that a non-default-branch merge never auto-closed
 
 The `--agent` / `--priority` / `--area` flags work via standard label conventions (`dev: agent`, `priority: <level>`, `area: <name>`). Repos that don't use those labels will simply get an empty result for those filters — the script doesn't enforce a label scheme, it just queries one when asked.
 

@@ -20,6 +20,8 @@ By default, review unstaged changes from `git diff`. The user may specify differ
 
 **Code Quality**: Evaluate significant issues like code duplication, missing critical error handling, accessibility problems, and inadequate test coverage.
 
+**Sensitive-Data Telemetry (default-deny)**: In repos that handle PII/PHI or other sensitive data (check CLAUDE.md), treat any path that sends user-entered text, transcription/dictation text, LLM-generated content, or other free-form values to telemetry (logs, error trackers like Sentry, metrics, traces, breadcrumbs, spans) as a high-severity issue — even inside a "sanitized allowlist." Field-name denylists are structurally leaky (prose under an innocuous key matches no name/regex and leaks); only key-allowlisting that drops unknowns is safe. Prefer logging opaque IDs, enums, counts, and durations over free-form values. Flag raw object literals passed to loggers and raw error-tracker mutators (e.g. Sentry `setExtra`/`setContext`/`addBreadcrumb`/`captureMessage`) when the project's CLAUDE.md requires routing them through a default-deny telemetry builder; defer to that CLAUDE.md for the exact enforced helper and lint rule.
+
 ## Confidence Scoring
 
 Rate each potential issue on a scale from 0-100:

@@ -50,6 +50,13 @@ targets:
     destination: .claude/skills/reviewit/SKILL.md
     substitutions: []
 
+  # /codex-review — independent second-opinion review via the Codex CLI
+  # (read-only by default). Generic: assumes only an installed + authenticated
+  # `codex` binary; no org-specific references.
+  - source: .claude/skills/codex-review/SKILL.md
+    destination: .claude/skills/codex-review/SKILL.md
+    substitutions: []
+
   # /actions-usage-audit — read-only org Actions-minute cost analysis. Generic
   # by design; org-specific baselines live in a consumer-owned, non-synced
   # `.claude/actions-usage-audit.local.md` the skill reads if present.

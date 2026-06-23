@@ -36,6 +36,7 @@ The lean default is right for ~80% of PRs. Reach for `/deepgrill` when **any** o
 - Schema migration or data-shape change
 - Large refactor (>20 files modified or >500 lines net)
 - Bug fix in an area with prior recurring incidents
+- Customer/tenant-variable behavior: vendor/third-party integrations, per-tenant config, prompt/output generation, data normalization — the **tenant-coupling lens** (catches one customer's data/config hardcoded into shared logic) runs in deep mode; see [`skills/grill/SKILL.md`](skills/grill/SKILL.md)
 - Explicit "review this carefully" / "this is high-risk" request
 
 Claude sessions should proactively recommend deep when these signals are present rather than waiting to be asked.

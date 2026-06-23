@@ -78,20 +78,37 @@ Run **at most two** agents:
 
 Skip the others — they're available on `/deepgrill`. If the diff has none of the silent-failure signals, run only `code-reviewer`. If you're tempted to run more agents because the change "feels load-bearing," that's the signal to suggest `/deepgrill` to the user instead and exit.
 
+If the diff touches **customer/tenant-variable behavior** (vendor/third-party integrations, per-tenant config, prompt/output generation, data normalization), recommend `/deepgrill` — the **tenant-coupling lens** that catches one customer's data/config hardcoded into shared logic lives in deep mode (see below), not in the lean two-agent set.
+
 ### Deep mode (`/deepgrill` invocation)
 
 Run the full agent matrix:
 
-| Signal in diff                                                                                 | Agent                                     |
-| ---------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| Always (source code present)                                                                   | `pr-review-toolkit:code-reviewer`         |
-| Try/catch, error-handling, fallback logic, async paths                                         | `pr-review-toolkit:silent-failure-hunter` |
-| New types, modified type definitions, generics changes                                         | `pr-review-toolkit:type-design-analyzer`  |
-| New large doc comments / docstrings, JSDoc on exports                                          | `pr-review-toolkit:comment-analyzer`      |
-| Auth, crypto, regulated-data handling (PHI/PII/PCI/secrets), input validation, SQL composition | Built-in `/security-review` skill         |
-| New tests, modified test scope on a fix/feature PR                                             | `pr-review-toolkit:pr-test-analyzer`      |
+| Signal in diff                                                                                                                      | Agent                                                                |
+| ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Always (source code present)                                                                                                        | `pr-review-toolkit:code-reviewer`                                    |
+| Try/catch, error-handling, fallback logic, async paths                                                                              | `pr-review-toolkit:silent-failure-hunter`                            |
+| New types, modified type definitions, generics changes                                                                              | `pr-review-toolkit:type-design-analyzer`                             |
+| New large doc comments / docstrings, JSDoc on exports                                                                               | `pr-review-toolkit:comment-analyzer`                                 |
+| Auth, crypto, regulated-data handling (PHI/PII/PCI/secrets), input validation, SQL composition                                      | Built-in `/security-review` skill                                    |
+| New tests, modified test scope on a fix/feature PR                                                                                  | `pr-review-toolkit:pr-test-analyzer`                                 |
+| Customer/tenant-variable behavior: vendor/third-party integrations, per-tenant config, prompt/output generation, data normalization | `pr-review-toolkit:code-reviewer` (tenant-coupling pass — see below) |
 
 Pick the signals present in the diff — don't run every agent on every PR. Two to five agents is typical in deep mode.
+
+### Tenant-coupling lens (deep mode)
+
+When the diff touches behavior that varies by customer, run a dedicated `code-reviewer` pass whose only job is to catch **_hardcoding the instance instead of the class_** — a value that varies by customer (one tenant's vocabulary, a customer's config, a specific user-reported string) frozen into shared logic as a literal or special-case branch. This is the defect class the other lenses structurally miss: such a hardcode is correct, type-safe, regulated-data-clean, and testable, yet ships the wrong feature. With only one live customer it is indistinguishable from a working fix in production.
+
+The agent's test for each flagged literal: _would this code still be correct for a second customer with different values?_ If no, the value belongs in config/data with a safe default, not in `src/`. (Illustrative shape: a fix that special-cases one customer by name — `if (tenantId === 'acme')` — or hardcodes a list of one customer's category labels to handle how that customer happens to name things. It generalizes to nothing and patches the symptom instead of the cause.)
+
+```
+Agent(
+  description="grill: tenant-coupling scan",
+  subagent_type="pr-review-toolkit:code-reviewer",
+  prompt="Scan this diff ONLY for tenant-coupling: literals or branches that encode one specific customer's data/config/vocabulary into shared logic — e.g. `tenantId === 'acme'`, a hardcoded list of one customer's category/term labels, per-customer special-cases. For each, ask: would this be correct for a SECOND customer with different values? If no, it belongs in config/data with a safe default, not in code. Ignore genuinely universal values (protocol constants, standard enums, framework keys). Report findings with severity (critical/suggestion/nitpick) + file:line and a one-line 'move to config' suggestion. Diff:\n\n<paste git diff @{u}...HEAD>\n\nUnder 250 words.",
+)
+```
 
 ---
 

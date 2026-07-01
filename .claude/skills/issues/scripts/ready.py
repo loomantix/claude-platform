@@ -2,7 +2,11 @@
 """List open GitHub issues with no open blockers, sorted by priority.
 
 An issue is excluded from the ready list when any of these hold:
-  - Label `status: blocked` (hard exclude)
+  - Label `status: blocked` (hard exclude) — blocked on an external dependency
+  - Label `status: on-staging` (hard exclude) — fix merged to a staging/
+    integration branch, awaiting release/promotion; done-but-pending, not
+    actionable. An opt-in convention: repos that never apply it see no matching
+    issues, so the exclusion is a harmless no-op there.
   - Body refs matching `Blocked by #N` or `Depends on #N` where #N is still open
   - It is the target of a closing reference from an OPEN pull request, or from a
     pull request MERGED within the last ADDRESSED_PR_WINDOW_DAYS days. This keeps
@@ -192,6 +196,23 @@ def label_names(issue: dict[str, Any]) -> list[str]:
     return [label["name"] for label in issue.get("labels", [])]
 
 
+# Labels that hard-exclude an issue from the ready queue regardless of blockers
+# or priority. These mark "not actionable now" lifecycle states, not urgency:
+#   - status: blocked     -> blocked on an external dependency
+#   - status: on-staging  -> fix merged to a staging/integration branch, awaiting
+#                            release/promotion (done, pending); re-surfacing it
+#                            just wastes an agent iteration rediscovering it is
+#                            already shipped
+# Both are opt-in conventions — a repo that never applies them has no matching
+# issues, so this exclusion is a harmless no-op there.
+HARD_EXCLUDE_LABELS = frozenset({"status: blocked", "status: on-staging"})
+
+
+def is_hard_excluded(labels: list[str]) -> bool:
+    """True if any label marks the issue not-actionable (blocked or already shipped)."""
+    return any(label in HARD_EXCLUDE_LABELS for label in labels)
+
+
 def parse_blockers(body: str | None) -> set[int]:
     return {int(m.group(1)) for m in BLOCKER_RE.finditer(body or "")}
 
@@ -263,7 +284,7 @@ def main() -> int:
         if args.unassigned and issue.get("assignees"):
             continue
         labels = label_names(issue)
-        if "status: blocked" in labels:
+        if is_hard_excluded(labels):
             continue
         blockers = parse_blockers(issue.get("body"))
         if blockers & open_nums:

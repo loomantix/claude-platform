@@ -39,6 +39,24 @@ def test_blocker_regex_still_parses_dependencies(ready_mod: ModuleType) -> None:
     assert ready_mod.parse_blockers("Blocked by #3\n- Depends on #4") == {3, 4}
 
 
+def test_hard_exclude_labels_cover_blocked_and_on_staging(ready_mod: ModuleType) -> None:
+    assert ready_mod.HARD_EXCLUDE_LABELS == {"status: blocked", "status: on-staging"}
+
+
+def test_is_hard_excluded_matches_either_state_in_any_position(ready_mod: ModuleType) -> None:
+    assert ready_mod.is_hard_excluded(["status: blocked"])
+    assert ready_mod.is_hard_excluded(["status: on-staging"])
+    # Position-independent: the exclude label can sit among unrelated labels.
+    assert ready_mod.is_hard_excluded(["area: backend", "status: on-staging", "dev: agent"])
+
+
+def test_is_hard_excluded_ignores_actionable_and_lookalike_labels(ready_mod: ModuleType) -> None:
+    assert not ready_mod.is_hard_excluded([])
+    assert not ready_mod.is_hard_excluded(["dev: agent", "area: backend", "priority: high"])
+    # Substring / prefix lookalikes must not trip the exact-match exclusion.
+    assert not ready_mod.is_hard_excluded(["status: on-staging-soak", "status: unblocked"])
+
+
 def test_ref_repo_extracts_owner_and_name(ready_mod: ModuleType) -> None:
     ref = {"number": 1, "repository": {"name": "platform", "owner": {"login": "acme"}}}
     assert ready_mod._ref_repo(ref) == "acme/platform"

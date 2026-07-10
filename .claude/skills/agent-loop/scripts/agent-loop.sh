@@ -3,8 +3,8 @@
 #
 # Usage: agent-loop.sh [iterations] [collection-branch] [--resume]
 #
-# Default: 10 iterations, auto-generated collection branch off the repo's
-# default branch (main / staging / etc., auto-detected via origin/HEAD).
+# Default: 10 iterations, auto-generated collection branch off the configured
+# base branch (env/config override, then origin/HEAD, then main).
 #
 # Examples:
 #   agent-loop.sh 5                       # 5 iterations, auto-generated branch
@@ -179,6 +179,11 @@ if [ -z "$DEFAULT_BRANCH" ]; then
     DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
 fi
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+if ! [[ "$DEFAULT_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "$DEFAULT_BRANCH" == *..* ]]; then
+    echo -e "${RED}✗${NC} base branch contains illegal characters: $DEFAULT_BRANCH"
+    echo "   allowed: [A-Za-z0-9._/-], no '..' segments"
+    exit 1
+fi
 
 REPO_SLUG=$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || echo "unknown/unknown")
 
@@ -199,6 +204,12 @@ git worktree prune 2>/dev/null || true
 
 echo -e "${DIM}› Fetching latest from origin...${NC}"
 git fetch origin --quiet
+
+if ! git rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT_BRANCH" >/dev/null; then
+    echo -e "${RED}✗${NC} configured base branch does not exist on origin: $DEFAULT_BRANCH"
+    echo "   Check AGENT_LOOP_BASE_BRANCH or $AGENT_LOOP_CONFIG."
+    exit 1
+fi
 
 if git rev-parse "origin/$COLLECTION_BRANCH" &>/dev/null; then
     BASE="origin/$COLLECTION_BRANCH"

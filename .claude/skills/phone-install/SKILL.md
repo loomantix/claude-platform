@@ -1,7 +1,6 @@
 ---
 name: phone-install
-description: Build a release APK from the consumer repo and install it on a tethered Android device over wireless ADB. Saves the ~8 commands otherwise needed for a device test.
-argument-hint: <adb-port> [--staging | --apk <path> | --no-launch | --no-pull]
+description: Build a release APK from the consumer repo and install it on a tethered Android device over wireless ADB. Use for phone sideload smoke tests, including consumer-specific build env overrides documented in the consumer repo. Accepts an ADB port and optional staging, development, production, APK-path, no-launch, or no-pull choices from the user's request.
 ---
 
 # /phone-install — release-build + wireless-install on Android
@@ -16,7 +15,9 @@ First positional arg — the ADB **connect** port from the phone's Wireless debu
 
 Flags (any order, after the port):
 
-- `--staging` — build against the staging API + test Clerk key (or whatever staging env vars the consumer's `mobile-build-apk` recipe expects). Default is **prod**.
+- `--prod` — build against production config. This is the default unless the consumer recipe documents a different default.
+- `--staging` — build against staging config by passing the consumer-documented env overrides.
+- `--dev` — build against local/dev config by passing the consumer-documented env overrides.
 - `--apk <path>` — install an existing APK instead of building. Skips Phase 3 (pull) and Phase 4 (build).
 - `--no-launch` — don't `am start` the app after install.
 - `--no-pull` — skip the `git pull --ff-only origin main` step (use current working-tree state).
@@ -25,14 +26,16 @@ Flags (any order, after the port):
 
 The skill reads these once at start; surface anything missing as an actionable error rather than silently defaulting:
 
-| Variable         | Purpose                                                                                                         | Default                                    |
-| ---------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `PHONE_IP`       | LAN IP of the device. Set once per developer machine (e.g. in `~/.bashrc`).                                     | _required_ — fail fast if unset            |
-| `ANDROID_HOME`   | Path to Android SDK. The consumer's `just mobile-build-apk` recipe normally exports this; respect it if set.    | recipe-dependent                           |
-| `APK_OUTPUT_DIR` | Where to drop the built APK. The consumer's recipe should honor this; if not, the recipe's hardcoded path wins. | recipe-dependent (e.g. `~/builds`)         |
-| Build secrets    | Whatever the consumer's `just mobile-build-apk` requires (e.g. `CLERK_PUBLISHABLE_KEY`, API URL overrides).     | consumer-specific — see consumer CLAUDE.md |
+| Variable         | Purpose                                                                                                         | Default                                                 |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `PHONE_IP`       | LAN IP of the device. Set once per developer machine (e.g. in `~/.bashrc`).                                     | _required_ — fail fast if unset                         |
+| `ANDROID_HOME`   | Path to Android SDK. The consumer's `just mobile-build-apk` recipe normally exports this; respect it if set.    | recipe-dependent                                        |
+| `APK_OUTPUT_DIR` | Where to drop the built APK. The consumer's recipe should honor this; if not, the recipe's hardcoded path wins. | recipe-dependent (e.g. `~/builds`)                      |
+| Build config     | Whatever the consumer's `just mobile-build-apk` requires (e.g. app env, public client keys, API URL overrides). | consumer-specific — see consumer AGENTS.md or CLAUDE.md |
 
 If `PHONE_IP` is unset, ask the developer for it and suggest adding `export PHONE_IP=…` to their shell rc so they don't have to repeat themselves.
+
+Never ask the developer for server-side secrets for this flow. Mobile sideload builds should use public client config or local env already documented by the consumer repo.
 
 ## Prerequisites
 
@@ -40,6 +43,18 @@ If `PHONE_IP` is unset, ask the developer for it and suggest adding `export PHON
 - `adb` in PATH (Linux / macOS / WSL2 all work — the flow is OS-agnostic once the SDK is reachable).
 - Consumer repo defines `just mobile-build-apk` (or the developer is invoking with `--apk <path>`).
 - Consumer repo defines `apps/mobile/app.config.ts` exposing both `version` and `android.package` (Expo convention). The skill derives both at runtime.
+
+## Consumer overrides
+
+This upstream skill must stay public-safe and consumer-agnostic. Consumer-specific app names, package IDs, output paths, environment defaults, public client keys, and local path conventions belong in the consumer repo's `AGENTS.md`, mobile README, or `justfile`, not in this upstream repo.
+
+When a consumer needs product-specific behavior, read its local instructions before building and apply only the documented overrides. Useful override fields:
+
+- default `APP_ENV` or equivalent build profile,
+- exact env vars for `--dev`, `--staging`, and `--prod`,
+- APK output naming convention if stdout does not include `APK: <path>`,
+- package ID or activity notes if Expo defaults do not apply,
+- data-loss risks before uninstalling or clearing app storage.
 
 ## Flow
 
@@ -83,21 +98,24 @@ The consumer repo owns the build recipe. Default invocation:
 just mobile-build-apk
 ```
 
-For `--staging`: the consumer's recipe must accept the staging variant via env vars. Reference the consumer's `CLAUDE.md` or `justfile` for the exact set; common patterns are an API URL override and a different Clerk publishable key. If the staging variant isn't documented, ask the developer.
+For `--dev`, `--staging`, and `--prod`: the consumer's recipe must accept the selected variant via env vars or documented build profiles. Reference the consumer's `AGENTS.md` or `CLAUDE.md`, mobile README, or `justfile` for the exact set. If a requested variant is not documented, ask the developer before guessing.
 
 **Run the build in background** (`run_in_background: true`) and tell the developer the time estimate up front: ~8–12 min cold, ~4–6 min with the Gradle cache warm.
 
-After the build completes, derive the APK path:
+After the build completes, parse the APK path from stdout first. Most consumer recipes echo `APK: <path>` or `✓ APK: <path>` on success.
+
+If stdout does not expose a path, derive it from the consumer's documented convention:
 
 ```bash
-VERSION=$(grep -oP "version:\s*'\K[^']+" apps/mobile/app.config.ts)
+VERSION=$(grep -oP '"version":\s*"\K[^"]+' apps/mobile/package.json | head -1)
+[ -n "$VERSION" ] || VERSION=$(grep -oP "version:\s*'\K[^']+" apps/mobile/app.config.ts | head -1)
 GIT_SHA=$(git rev-parse --short HEAD)
 APP_NAME=$(grep -oP "name:\s*'\K[^']+" apps/mobile/app.config.ts | head -1)
-# Recipe-honored APK_OUTPUT_DIR wins; otherwise grep the build's "✓ APK: …" line from build output.
+# Recipe-honored APK_OUTPUT_DIR wins when the consumer documents this convention.
 APK="${APK_OUTPUT_DIR:?}/${VERSION}/${APP_NAME}-${VERSION}-${GIT_SHA}.apk"
 ```
 
-If the recipe doesn't follow the `${APP_NAME}-${VERSION}-${GIT_SHA}.apk` convention, parse the path from the build's stdout (most recipes echo `✓ APK: <path>` on success). Fail loudly if the APK is missing rather than guessing.
+Fail loudly if the APK is missing rather than guessing another path.
 
 ### 5. Install
 
@@ -135,11 +153,12 @@ Concise summary back to the developer:
 
 ## Hard rules
 
-- **Never commit secret values to skill docs, memory, or logs.** Read build secrets (Clerk keys, API tokens) from the consumer's env files at invocation time only. Public test/sandbox keys committed in the consumer's repo are OK to reference literally.
+- **Never commit secret values to skill docs, memory, or logs.** Read build secrets (auth-provider keys, API tokens) from the consumer's env files at invocation time only. Public test/sandbox keys committed in the consumer's repo are OK to reference literally.
 - **Never push to remote during this flow.** Build-and-install only; local state only.
 - **Never modify `apps/mobile/android/`** manually — Expo regenerates it on every `expo prebuild --clean`. If the consumer's recipe pins Gradle (e.g. RN 0.83 has a 9.0 ceiling), respect that pin; don't bump it as a side-effect of a phone-install run.
 - **Never uninstall the app without asking.** Uninstall wipes local data; for products with offline / unsubmitted state, that data may be unrecoverable.
-- **Never silently fall back to a different build profile.** If `--staging` is passed and the consumer recipe doesn't support it, fail loudly with the recipe location for the developer to inspect.
+- **Never silently fall back to a different build profile.** If `--dev`, `--staging`, or `--prod` is passed and the consumer recipe doesn't support it, fail loudly with the recipe location for the developer to inspect.
+- **Never put private consumer repo names or consumer-specific operational details in this upstream skill.** Keep those details in the consumer repo.
 
 ## When NOT to use this skill
 
@@ -155,6 +174,6 @@ This skill is synced from the upstream repo. Consumer repos using it should ensu
 1. `just mobile-build-apk` exists and emits the APK path on stdout.
 2. `apps/mobile/app.config.ts` exposes `version`, `name`, and `android.package`.
 3. Developer sets `PHONE_IP` in their shell rc.
-4. Build env vars required by the recipe are documented in the consumer's CLAUDE.md (so this skill's "ask the developer" fallback has somewhere to point).
+4. Build env vars required by the recipe are documented in the consumer's AGENTS.md or CLAUDE.md, mobile README, or `justfile` (so this skill's "ask the developer" fallback has somewhere to point).
 
 If your consumer repo deviates from these conventions, prefer fixing the recipe over forking this skill — the whole point of upstream sync is that one improvement to the flow lands in every consumer on the next sync run.

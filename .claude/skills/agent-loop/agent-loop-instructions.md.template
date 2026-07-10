@@ -66,7 +66,7 @@ If you discover any of these mid-issue, **stop, comment on the issue, classify t
 - The issue has open policy questions — re-read the body; if it asks "should we A or B?" or "decision needed," that's a human call.
 - The issue requires deleting org-level secrets, modifying branch protection, or installing GitHub Apps — these have organization-wide blast radius and need human verification.
 - Acceptance criteria can't be satisfied without changing the synced surfaces listed above.
-- **Your branch's diff vs current `origin/main` shows large DELETIONS in files you didn't author.** This is the stacked-PR-revert trap: a sibling iteration's PR merged to `main` mid-loop, and your branch's baseline now predates it, so opening this PR would _revert_ the sibling's work. Comment on the issue noting the sibling-merge race and exit — the human can re-run after the dust settles.
+- **Your branch's diff vs the current integration branch shows large DELETIONS in files you didn't author.** This is the stacked-PR-revert trap: a sibling iteration's PR merged mid-loop, and your branch's baseline now predates it, so opening this PR would _revert_ the sibling's work. Comment on the issue noting the sibling-merge race and exit — the human can re-run after the dust settles.
 
 ## Continuous improvement — classify every bail
 
@@ -116,8 +116,8 @@ A green diff against typecheck + targeted test + lint is a much stronger ship-re
 Before opening the PR, run this and read it:
 
 ```bash
-git diff --stat origin/main..HEAD | tail -3
-git log --oneline origin/main..HEAD
+git diff --stat origin/<integration-branch>..HEAD | tail -3
+git log --oneline origin/<integration-branch>..HEAD
 ```
 
 Two failure modes to catch here:
@@ -134,7 +134,7 @@ Two failure modes to catch here:
 
 ## Also in this PR (cross-cutting scope)
 
-<Only include this section if `git log origin/main..HEAD` shows commits
+<Only include this section if `git log origin/<integration-branch>..HEAD` shows commits
 you didn't author — i.e., your branch carried prior-iteration content
 forward via the agent-loop collection branch. List each cross-cutting
 change with the issue it closes, so reviewers see the full scope.>
@@ -164,6 +164,6 @@ Closes #<N>
 
 **Do not run `/reviewit` yourself.** The human will trigger `/reviewit <pr-number>` on whichever PR they want reviewed (usually the summary PR for a bundled run, not the per-issue PRs).
 
-## Operator note — the end-of-run summary PR base
+## Operator note — align the base branch
 
-The loop's collection branch and the end-of-run summary PR are both cut against the repo's auto-detected default branch (`git symbolic-ref refs/remotes/origin/HEAD`). **If your repo's default branch is _not_ the branch `/agent-loop` per-issue PRs target** (e.g. a repo whose integration branch is `staging` but whose default branch is `main`), the summary PR's diff will be dominated by whatever is unmerged between those two branches — not the loop's work — and merging it would bypass your normal promotion flow. In that case treat the summary PR as a roll-up _view_, and **merge the per-issue PRs** (against your integration branch) as the real unit. If this bites you, that's a `loop-mechanics` learning for `.claude/skills/backlog-refinement/LEARNINGS.md` — and a candidate fix is to make the collection-branch / summary-PR base configurable in the loop script.
+Set `base_branch` in `.claude/skills/agent-loop/agent-loop.config` to the same integration branch named in this file. The collection branch, pre-PR sanity checks, per-issue PRs, and end-of-run summary PR must all compare against the same branch.

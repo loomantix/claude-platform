@@ -6,6 +6,8 @@ two subprocess wrappers so the tests stay hermetic.
 """
 from __future__ import annotations
 
+import json
+import sys
 from types import ModuleType
 from typing import Any
 
@@ -50,11 +52,20 @@ def test_is_hard_excluded_matches_either_state_in_any_position(ready_mod: Module
     assert ready_mod.is_hard_excluded(["area: backend", "status: on-staging", "dev: agent"])
 
 
+def test_is_hard_excluded_matches_any_agent_bail_label(ready_mod: ModuleType) -> None:
+    # A bail label excludes even when a stale `dev: agent` admission label remains
+    # (the removal is two separate gh ops and may not have landed).
+    assert ready_mod.is_hard_excluded(["agent-bail: spec-gap"])
+    assert ready_mod.is_hard_excluded(["dev: agent", "agent-bail: stale", "agent: refined"])
+
+
 def test_is_hard_excluded_ignores_actionable_and_lookalike_labels(ready_mod: ModuleType) -> None:
     assert not ready_mod.is_hard_excluded([])
     assert not ready_mod.is_hard_excluded(["dev: agent", "area: backend", "priority: high"])
     # Substring / prefix lookalikes must not trip the exact-match exclusion.
     assert not ready_mod.is_hard_excluded(["status: on-staging-soak", "status: unblocked"])
+    # A label that merely mentions "agent" but is not the bail prefix stays actionable.
+    assert not ready_mod.is_hard_excluded(["dev: agent", "agent: refined"])
 
 
 def test_ref_repo_extracts_owner_and_name(ready_mod: ModuleType) -> None:
@@ -121,3 +132,42 @@ def test_fetch_addressed_keeps_refs_when_repo_unknown(
     monkeypatch.setattr(ready_mod, "_pr_list", lambda extra: prs if "open" in extra else [])
     # When the current repo can't be resolved, fall open rather than drop links.
     assert ready_mod.fetch_addressed_numbers() == {42}
+
+
+def _issue(num: int, *, labels: list[str] | None = None, body: str = "") -> dict[str, Any]:
+    return {
+        "number": num,
+        "title": f"issue {num}",
+        "body": body,
+        "labels": [{"name": n} for n in (labels or [])],
+        "assignees": [],
+    }
+
+
+def test_main_drops_hard_excluded_and_pr_addressed_from_ready_queue(
+    ready_mod: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """End-to-end wiring: main() applies every exclusion to the ready queue.
+
+    The individual predicates are unit-tested above; this pins the assembly in
+    main() so a refactor that unwires `is_hard_excluded` / the PR-addressed set
+    can't pass silently. Covers all four drop paths + one issue that survives.
+    """
+    issues = [
+        _issue(1),  # actionable — the only one that should survive
+        _issue(2, labels=["status: on-staging"]),  # hard-excluded (already shipped)
+        _issue(3, labels=["status: blocked"]),  # hard-excluded (blocked)
+        _issue(4, body="Depends on #1"),  # open blocker (#1 is open) -> excluded
+        _issue(5),  # addressed by a merged/open PR -> excluded
+    ]
+    monkeypatch.setattr(sys, "argv", ["ready", "--json"])
+    monkeypatch.setattr(ready_mod, "fetch_issues", lambda extra: issues)
+    monkeypatch.setattr(ready_mod, "fetch_addressed_numbers", lambda: {5})
+
+    rc = ready_mod.main()
+
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert [issue["number"] for issue in out] == [1]

@@ -72,6 +72,14 @@ targets:
     destination: .claude/skills/feature-dev/SKILL.md
     substitutions: []
 
+  - source: .claude/skills/task-packet/SKILL.md
+    destination: .claude/skills/task-packet/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/phone-install/SKILL.md
+    destination: .claude/skills/phone-install/SKILL.md
+    substitutions: []
+
   - source: .claude/skills/agent-loop/SKILL.md
     destination: .claude/skills/agent-loop/SKILL.md
     substitutions: []

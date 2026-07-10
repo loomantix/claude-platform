@@ -52,6 +52,7 @@ Exclusion rules:
 
 - Label `status: blocked`
 - Label `status: on-staging` — fix merged to a staging/integration branch, awaiting release/promotion (done, pending; an opt-in convention — no-op in repos that don't apply it)
+- Any `agent-bail:*` label — explicitly excluded by backlog refinement or a prior loop run, even if a stale `dev: agent` label remains
 - Body contains `Blocked by #N` or `Depends on #N` where #N is still open
 - Targeted by a closing reference from an **open** PR, or from a PR **merged in the last 30 days** (via `closingIssuesReferences`, with a closing-keyword body fallback) — keeps issues already fixed as a PR side-item or by an in-review PR out of the queue, including done-on-integration issues that a non-default-branch merge never auto-closed
 

@@ -203,14 +203,20 @@ def label_names(issue: dict[str, Any]) -> list[str]:
 #                            release/promotion (done, pending); re-surfacing it
 #                            just wastes an agent iteration rediscovering it is
 #                            already shipped
-# Both are opt-in conventions — a repo that never applies them has no matching
+#   - agent-bail:*        -> explicitly excluded by refinement or a prior loop
+#                            run, even if a stale `dev: agent` label remains
+# All are opt-in conventions — a repo that never applies them has no matching
 # issues, so this exclusion is a harmless no-op there.
 HARD_EXCLUDE_LABELS = frozenset({"status: blocked", "status: on-staging"})
+BAIL_LABEL_PREFIX = "agent-bail:"
 
 
 def is_hard_excluded(labels: list[str]) -> bool:
     """True if any label marks the issue not-actionable (blocked or already shipped)."""
-    return any(label in HARD_EXCLUDE_LABELS for label in labels)
+    return any(
+        label in HARD_EXCLUDE_LABELS or label.startswith(BAIL_LABEL_PREFIX)
+        for label in labels
+    )
 
 
 def parse_blockers(body: str | None) -> set[int]:

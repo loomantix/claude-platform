@@ -1,24 +1,48 @@
-# agent-loop.config — consumer-owned overrides for /agent-loop.
-#
-# Bootstrapped from a starter template on first sync; later upstream edits
-# don't overwrite it (create_if_missing). Edit freely. Format is simple
-# `key = value` lines (the loop script reads specific keys, not `source`d).
-#
-# ─────────────────────────────────────────────────────────────────────────
-# base_branch
-#   The branch the loop builds its collection branch ON and targets the
-#   end-of-run summary PR AGAINST. Leave it unset (commented out) to
-#   auto-detect the repo's default branch via origin/HEAD — correct for
-#   most repos.
-#
-#   Set it when your INTEGRATION branch differs from your DEFAULT branch —
-#   e.g. a staging→main promotion flow where per-issue PRs target `staging`
-#   but the GitHub default branch is `main`. Without this, the collection
-#   branch is cut off `main` and the summary PR targets `main`, so its diff
-#   is dominated by unpromoted backlog rather than the loop's work — and
-#   merging it bypasses your promotion flow.
-#
-#   A one-off override is also available without editing this file:
-#     AGENT_LOOP_BASE_BRANCH=staging .claude/skills/agent-loop/scripts/agent-loop.sh
-#
-# base_branch = staging
+# Consumer-owned agent-loop settings. Literal `key = value` lines; this file is
+# parsed, never sourced. Bootstrapped from this template on first sync
+# (create_if_missing); later upstream edits do not overwrite it. Do not embed
+# credentials, identifiers, PHI, or user data — hook output is not sanitized.
+
+# Integration branch. Leave empty to use origin/HEAD, then main. Set it when
+# your integration branch differs from the default branch (e.g. a staging->main
+# promotion flow). Env AGENT_LOOP_BASE_BRANCH overrides this for a one-off run.
+base_branch =
+
+# Run once inside each new issue worktree. Use an isolated frozen install; never
+# symlink mutable node_modules or equivalent dependency directories.
+setup_hook =
+
+# Run after the worker, after each local review, and after fresh-base merge.
+# Prefer targeted checks and avoid unbounded full-suite output.
+validation_hook =
+
+# Both review hooks are REQUIRED for a mutating run. Each must review locally,
+# fix confirmed findings, revalidate as needed, commit any fixes, and leave a
+# clean tree. They must NOT push, open a PR, or invoke hosted AI reviewers
+# (Gemini, Copilot, reviewit). Typical wiring is a fresh headless Claude deep
+# grill for claude_review_hook and a local Codex review for codex_review_hook.
+claude_review_hook =
+codex_review_hook =
+
+# Optional worker override. When empty, the wrapper runs the Claude CLI in
+# headless, auto-approving mode (--permission-mode bypassPermissions --print)
+# with the prompt from prompt.txt, honoring the model settings below. Set this
+# to run a different implementation agent instead.
+worker_hook =
+worker_model =
+worker_fallback_model =
+worker_retries = 1
+worker_timeout_seconds = 3600
+hook_timeout_seconds = 3600
+retry_on_timeout = true
+retry_delay_seconds = 15
+
+# `ready` preserves legacy open/closed dependency behavior. `merged-to-base`
+# requires dependency PR merge commits to be present in origin/<base>.
+dependency_gate = ready
+
+branch_prefix = agent-loop
+worktree_root = /tmp/agent-loop-worktrees
+log_root = /tmp/agent-loop-logs
+log_max_kb = 1024
+output_max_lines = 40

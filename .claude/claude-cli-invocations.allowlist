@@ -10,5 +10,4 @@
 # copying an allowlisted region into a new synced .sh file does NOT
 # inherit the approval; the reviewer has to add a separate entry.
 
-666c1d59234103f4c8e33d885aff7b420765b3468ede5431e06a81b347880667  .claude/skills/agent-loop/scripts/agent-loop.sh  agent-loop.sh: one-shot prompt template resolution + {ISSUE_ID} validation (pre-loop)
-f89c6bf465f0f918e9d86937851c67e948a3609b47e3cdb70622f5d0d0e8d541  .claude/skills/agent-loop/scripts/agent-loop.sh  agent-loop.sh: per-iter substitution + claude invocation (bypassPermissions)
+dc4ab79eb46f396bab93e8808d2c6f9a80473ce1d9cc72fac14de0ab244aa0e5  .claude/skills/agent-loop/scripts/agent-loop.sh  agent-loop.sh: default-worker Claude CLI command builder (--print --permission-mode bypassPermissions, optional --model)

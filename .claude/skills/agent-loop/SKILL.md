@@ -1,71 +1,161 @@
 ---
 name: agent-loop
-description: Autonomous Claude relay loop on top of /issues — claim a ready issue, spawn a fresh Claude session to work it, push results to a collection branch, repeat. Opens a summary PR at the end.
-argument-hint: '[iterations] [collection-branch] [--resume]'
+description: Autonomous issue implementation loop with strict issue allowlisting, one linked worktree per issue, configurable setup and local review hooks, fresh-base validation, and publication only after deterministic local Claude and Codex reviews. Use when Claude should implement a bounded GitHub issue queue without hosted AI reviewers.
+argument-hint: '[iterations] [--iterations N] [--issues N,N,...] [--resume] [--dry-run]'
 ---
 
-# /agent-loop
+# Agent Loop
 
-Run an autonomous Claude relay over the `/issues` ready queue. Each iteration claims an issue, spawns a fresh Claude session in `--permission-mode bypassPermissions`, lets it work, then pushes the result to a shared collection branch. After the loop, opens an `agent-loop: <branch>` PR with the closed-issues + commit-log summary.
+Run isolated issue workers and publish one reviewed pull request per issue. The
+wrapper owns selection, claiming, worktrees, local reviews, base integration,
+push, and PR creation. A worker only implements, validates, refactors, and
+commits locally — by default it is the Claude CLI, but any command can be
+substituted via `worker_hook`.
 
 ## Usage
 
 ```bash
-.claude/skills/agent-loop/scripts/agent-loop.sh [iterations] [collection-branch] [--resume]
+.claude/skills/agent-loop/scripts/agent-loop.sh --issues 5105,5106 --iterations 2
+
+.claude/skills/agent-loop/scripts/agent-loop.sh --issues 5105,5106 --dry-run
 ```
 
-Defaults: 10 iterations, auto-generated collection branch (`agent-loop-<timestamp>-<rand>`), ready-queue-only.
+| Option             | Behavior                                                                                                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--issues N,N,...` | Restrict selection to exactly these issue numbers. Never fall through to unrelated ready work.                                                                                |
+| `--iterations N`   | Process at most `N` issues. A legacy numeric first argument remains accepted.                                                                                                 |
+| `--resume`         | Permit an eligible issue already assigned only to the current user.                                                                                                           |
+| `--dry-run`        | Show selections, dependency decisions, worktree/branch paths, hooks, and publication without claiming, fetching, creating worktrees, running hooks, pushing, or creating PRs. |
 
-| Args                      | Behavior                                                        |
-| ------------------------- | --------------------------------------------------------------- |
-| `5`                       | 5 iterations, auto-generated branch, ready-only                 |
-| `5 wasm-plugins`          | 5 iterations, named collection branch                           |
-| `5 wasm-plugins --resume` | also pick up issues already assigned to `@me` (orphan-recovery) |
-| `--help`                  | print the script header                                         |
+Omitting `--issues` retains the ready-queue behavior for backward
+compatibility. Use an allowlist for every scoped or retrospective-driven run.
 
-## Prerequisites (per-repo, one-time)
+Collection branches and worker-side publication are removed. Every selected
+issue gets a unique `agent-loop/issue-<N>-<run>` branch and linked worktree.
 
-1. **`agent-loop-instructions.md` at the repo root** — repo-specific agent instructions (codebase conventions, build commands, test invocation, deployment quirks). The Claude prompt that points Claude here is **consumer-owned** in `.claude/skills/agent-loop/prompt.txt`, bootstrapped from `prompt.txt.template` on first sync (`create_if_missing: true`). The default content — `Read @agent-loop-instructions.md and follow the instructions. Your assigned issue is #{ISSUE_ID}. Run 'gh issue view {ISSUE_ID}' to see the full description, then complete it.` — is the value the script falls back to when `prompt.txt` is absent, empty, or unreadable. Edit `prompt.txt` to customize what Claude is told before reading your instructions file. If `agent-loop-instructions.md` itself is missing, the script exits before claiming work.
+## Required Consumer Files
 
-   The instructions, prompt, and `.claude/skills/agent-loop/agent-loop.config` are bootstrapped via `create_if_missing: true` from templates in `.claude/skills/agent-loop/`. After first creation, customize them for your repo; subsequent syncs leave them alone. Set `base_branch` in the config when the integration branch differs from the GitHub default branch.
+- `agent-loop-instructions.md`: repository conventions and worker safety rules.
+- `.claude/skills/agent-loop/prompt.txt`: prompt containing `{ISSUE_ID}`.
+  Require a local commit and forbid push/PR creation.
+- `.claude/skills/agent-loop/agent-loop.config`: hook and base configuration.
+- `.claude/skills/issues/scripts/ready.py`: ready-queue provider (synced with
+  the `/issues` skill).
 
-2. **`dev: agent` label + a triaged backlog** in the consumer's GitHub repo. The script picks **only** issues carrying `dev: agent` — without the label, an issue is invisible to the loop. This is a positive filter, not an exclusion: the operator must walk the backlog once and tag the agent-shaped subset, which keeps the loop from wandering into design / cross-repo / device-gated work. Create the label once per repo, then triage:
+These consumer files are bootstrapped with `create_if_missing: true`; merge
+template changes manually into existing consumers.
 
-   ```bash
-   gh label create "dev: agent" --description "Suitable for autonomous AI agent completion" --color 8B5CF6
-   ```
+## Config Interface
 
-   Use `/backlog-refinement` to assess and prepare this queue. Its consumer-owned `RUBRIC.md` is the source of truth for readiness, make-ready transformations, and bail categories; do not bulk-tag issues from a looser checklist.
+The config is parsed as literal `key = value` lines and is never sourced.
+Unknown or duplicate keys fail closed. Hook values are shell commands executed
+with the issue worktree as the current directory.
 
-3. **`gh`, `jq`, `xxd`, `python3`, `claude`** on `PATH`. The script hard-fails if any are missing.
-4. **`/issues` skill synced** — the script invokes `.claude/skills/issues/scripts/ready.py --json` to enumerate the queue. Without it the script exits at startup.
+| Key                                              | Purpose                                                                                                                                |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `base_branch`                                    | Integration branch; env `AGENT_LOOP_BASE_BRANCH` overrides it.                                                                         |
+| `setup_hook`                                     | Isolated bootstrap, such as `pnpm install --frozen-lockfile`. Never symlink mutable dependency directories.                            |
+| `validation_hook`                                | Bounded validation after the worker, after each review, and after fresh-base integration.                                              |
+| `claude_review_hook`                             | Required fresh local Claude deep review. It must fix confirmed findings, validate, commit fixes, and never push.                       |
+| `codex_review_hook`                              | Required local Codex review against `$AGENT_LOOP_REVIEW_BASE`. It must fix confirmed findings, validate, commit fixes, and never push. |
+| `worker_hook`                                    | Optional worker command override. Default is the Claude CLI in headless, auto-approving mode.                                          |
+| `worker_model`, `worker_fallback_model`          | Primary and capacity-fallback models for the default worker.                                                                           |
+| `worker_retries`                                 | Retries after clean capacity/timeout failures. Default `1`.                                                                            |
+| `worker_timeout_seconds`, `hook_timeout_seconds` | Bounded execution time.                                                                                                                |
+| `retry_on_timeout`, `retry_delay_seconds`        | Timeout retry policy.                                                                                                                  |
+| `dependency_gate`                                | `ready` (legacy) or `merged-to-base`.                                                                                                  |
+| `branch_prefix`, `worktree_root`, `log_root`     | Isolated path/ref controls.                                                                                                            |
+| `log_max_kb`, `output_max_lines`                 | Bound captured logs and displayed failure tails.                                                                                       |
 
-## Behavior per iteration
+Hooks receive `AGENT_LOOP_ISSUE_ID`, `AGENT_LOOP_BASE_BRANCH`,
+`AGENT_LOOP_BRANCH`, `AGENT_LOOP_WORKTREE`, `AGENT_LOOP_LOG_DIR`, and
+`AGENT_LOOP_PROMPT`. Review hooks also receive `AGENT_LOOP_REVIEW_BASE` after a
+fresh fetch.
 
-1. Sync the worktree with `origin/<collection-branch>` — fetches and fast-forwards. If the remote was force-pushed, cherry-picks the local commits onto the new tip (with a pre-reset SHA snapshot so a failed cherry-pick restores the original chain rather than leaving partial replay). Genuine merge conflicts fail loud; the eventual push surfaces persistent ones via the `PUSH_FAILURES` counter.
-2. Pick a work item: with `--resume`, prefer any open `dev: agent` issue already assigned to `@me`; otherwise the first dependency-free row from `ready.py --agent --json`. The `dev: agent` label is required on both paths — an empty queue means the backlog hasn't been triaged yet, not that there's no work to do.
-3. Claim by adding `@me` as assignee. Re-fetch immediately afterward — if there are >1 assignees, a parallel worker raced; release and try the next row.
-4. Spawn `claude --chrome --permission-mode bypassPermissions --print "$PROMPT" --output-format stream-json` and stream the events through `jq` for colored display. The Claude PID is tracked so `Ctrl-C` interrupts the loop cleanly. **Prompt source:** the prompt is read from the consumer-owned `.claude/skills/agent-loop/prompt.txt` (bootstrapped from the upstream `prompt.txt.template` on first sync via `create_if_missing: true`); the script falls back to a baked-in literal when that file is absent, empty, or unreadable. **Security posture:** the `claude` invocation block is bracketed by `# claude-cli-invocations:start` / `:end` markers and locked in `.claude/claude-cli-invocations.allowlist` (allowlist entries bind to a specific file path, not just the hash); the upstream CI lint at `.claude/lint-claude-cli-invocations.py` fails on any unrecognized hash and rejects sensitive tokens outside any marker. **Adding or rotating an allowlist entry requires byte-level review of the new locked region in the same PR** — the hash by itself is opaque, the diff is the audit trail. The prompt template itself is covered by `.claude/lint-skill-content.py`'s weaponization rules (fetch-and-execute, exfil sinks, off-allowlist URLs, etc.).
-5. Snapshot newly-closed issues since the loop started (used for the final PR body) and push to the collection branch via `push_to_collection` — retry-and-merge with up to 3 attempts.
+For a non-mutating consumer smoke test from an upstream development worktree,
+set `AGENT_LOOP_PROJECT_DIR=/path/to/consumer` and pass `--dry-run`. Do not use
+that override for a mutating run; execute the consumer's synced script instead.
 
-## After the loop
+Do not put secrets, credentials, PHI, customer identifiers, or user data in
+config values or hook output. The wrapper deliberately uses a generic PR body
+and never copies issue bodies, model logs, or findings into GitHub.
 
-If any commits accumulated on `origin/<collection-branch>` past `origin/<default-branch>`, opens an `agent-loop: <collection-branch>` PR (or attaches to an existing one) with:
+## Default Worker and the Invocation Lock
 
-- summary line: `<N> iteration(s), <M> commit(s)`
-- `### Closed Issues` — newly-closed issues since loop start
-- `### Commit Log` — `git log --oneline <default>..<collection>`
+When `worker_hook` is unset, the wrapper runs the Claude CLI in
+`--permission-mode bypassPermissions --print` mode against the issue prompt.
+That is the only `claude` invocation in the script, and it is bracketed by
+`# claude-cli-invocations:start` / `:end` markers. The upstream CI gate
+`.claude/lint-claude-cli-invocations.py` hashes the locked region and refuses
+to pass unless the hash is listed for this path in
+`.claude/claude-cli-invocations.allowlist`. Any change to the flags, model
+handling, or prompt wiring rotates the hash and must be re-approved by a
+byte-level review of the region in the same PR — the diff is the audit trail.
+A consumer that sets `worker_hook` supplies its own runner and the Claude CLI
+is not required on `PATH`.
 
-Then removes the worktree.
+## Deterministic Phase Order
 
-## Worktree isolation
+1. Select and dependency-gate an eligible issue.
+2. Claim it, detecting assignment races.
+3. Create a unique worktree and branch from `origin/<base>`.
+4. Run the isolated setup hook.
+5. Run the worker and require a clean local commit.
+6. Validate, then run the fresh Claude deep-review hook and validate again.
+7. Fetch the base, run the Codex-review hook against that fresh ref, and validate.
+8. Fetch and merge the base again, inspect a bounded diff, and revalidate.
+9. Confirm no worker/hook pushed the branch; only then push and open the PR.
 
-Each invocation creates `/tmp/agent-loop-<branch>-<pid>` so multiple runs don't collide. The `Ctrl-C` trap attempts a final push of any committed work and then removes the worktree — but if that final push fails (auth, branch protection, force-push race), the worktree is **preserved** at `/tmp/agent-loop-...` so a human can recover the local commits. The post-loop path also preserves the worktree on push failure, before skipping PR creation.
+Do not invoke Gemini, Copilot, `reviewit`, or any GitHub-hosted AI reviewer.
 
-## Base branch
+## Dependency Gate
 
-Resolved in this order: `AGENT_LOOP_BASE_BRANCH`, `base_branch` in the consumer-owned `.claude/skills/agent-loop/agent-loop.config`, then the GitHub default branch from `origin/HEAD` (falling back to `main`). The collection branch and summary PR both use this base. Configure it explicitly for promotion-flow repositories whose integration branch differs from the default branch.
+With `dependency_gate = merged-to-base`, parse `Blocked by #N`, `Depends on #N`,
+`Blocked by PR #N`, and `Depends on PR #N`. A PR dependency passes only when
+GitHub reports it merged to the configured base and its merge commit is an
+ancestor of the current `origin/<base>`. An issue dependency passes only when
+one of its closing PRs meets the same condition. Closed issues alone do not
+pass. `dependency_gate = ready` (the default) preserves the legacy ready-queue
+semantics.
 
-## Source of truth
+## Failure and Recovery
 
-This skill lives upstream at `.claude/skills/agent-loop/`. SKILL.md and `scripts/agent-loop.sh` are synced to consumer repos via the sync mechanism. Edits in a consumer will be overwritten on next sync — make changes upstream.
+On any non-zero worker exit, inspect whether the worktree is dirty or contains
+new commits. Preserve all changed or committed work and stop with recovery
+commands. Retry capacity/timeouts only when the worktree is unchanged. Review,
+setup, integration, and validation failures also preserve the worktree. Never
+reset, reuse, clean, or delete a dirty recovery worktree.
+
+Successful publication removes the clean linked worktree but retains the local
+branch. Interrupted runs preserve the active worktree.
+
+## Migration From the Collection-Branch Loop
+
+The previous loop pushed every iteration to a shared collection branch and
+opened one summary PR at the end. That model is gone:
+
+- The removed `[collection-branch]` positional now errors. Scope a run with
+  `--issues N,N,...` instead. The numeric `[iterations]` positional still works,
+  and `--iterations N` is its explicit form.
+- Each issue now gets its own branch, worktree, and PR — there is no summary PR.
+- `agent-loop.config`, `prompt.txt`, and `agent-loop-instructions.md` are
+  `create_if_missing` targets, so existing consumers keep their old copies. They
+  must be migrated by hand: add the `setup_hook`, `validation_hook`,
+  `claude_review_hook`, and `codex_review_hook` keys (both review hooks are
+  required for a mutating run), and rewrite the prompt/instructions so the worker
+  commits locally and never pushes or opens a PR.
+
+## Test Guidance
+
+Use focused commands and bounded output. For Vitest 4, target a test with:
+
+```bash
+pnpm --filter frontend test:run TestName
+```
+
+Do not insert `--` before `TestName`; that can run the full suite.
+
+## Source of Truth
+
+This directory is upstream-owned and synced to consumers. Change reusable
+mechanics here, not in a consumer's synced copy.

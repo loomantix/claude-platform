@@ -53,22 +53,23 @@ Write a tight, scoped prompt. A vague "review this" wastes the run; name the fil
 
 ## Phase 2: Run Codex (read-only, streaming)
 
-Run Codex non-interactive and read-only. **Flags verified against `codex-cli 0.141.0`** — the CLI surface drifts, so if a flag errors with `unexpected argument`, check `codex exec --help`. `codex exec` is already non-interactive, so there is **no** `--ask-for-approval` flag and **no** `--full-auto` on the subcommand — do not add them (they hard-error). The flags that matter, and two traps:
+Run Codex non-interactive and read-only. **Flags verified against `codex-cli 0.141.0`** — the CLI surface drifts, so if a flag errors with `unexpected argument`, check `codex exec --help`. `codex exec` is already non-interactive, so there is **no** `--ask-for-approval` flag and **no** `--full-auto` on the subcommand — do not add them (they hard-error). The flags that matter, and three traps:
 
 - `--sandbox read-only` — Codex cannot touch the tree. This is the safety property; keep it. (Sandbox modes: `read-only` · `workspace-write` · `danger-full-access`.)
 - `--skip-git-repo-check` — lets it run in a worktree / subdir without complaining.
 - `-o <file>` (`--output-last-message`) — writes **only** Codex's final message (the findings) to its own file. Without it you have to dig the findings out of the bottom of a huge stream that also echoes the prompt, `AGENTS.md`, and every file Codex auto-read.
 - **Trap 1 — never pipe through `tail`/`head`.** They buffer until the process exits, so a multi-minute run looks hung with zero output. Redirect straight to a file.
 - **Trap 2 — contention.** Many parallel Codex runs (across sessions) rate-limit each other and slow down. Prefer one at a time.
+- **Trap 3 — `codex exec` reads stdin and will BLOCK on it.** It always tries to read a prompt from stdin (it prints `Reading additional input from stdin...`) even when the prompt is passed as an argument. If stdin never reaches EOF it hangs **forever** — the process stays alive doing nothing, which reads as "Codex is slow" but is a deadlock (observed ~10 min+ on that one line). This bites when the `codex exec` shares a bash invocation with a preceding stdin-consuming command (e.g. a `python3 - <<'PY'` heredoc), which leaves the shell's stdin open. **Always redirect `</dev/null`** (see the commands below) and give `codex exec` its own clean invocation — never prefix it with a heredoc. To spot a live hang: if the tail of the full log is stuck on `Reading additional input from stdin...`, it's blocked, not thinking — kill it and re-run with `</dev/null`.
 
 ```bash
 codex exec --sandbox read-only --skip-git-repo-check \
-  -o /tmp/codex-findings-$$.md "$REVIEW_PROMPT" >/tmp/codex-full-$$.out 2>&1 &
+  -o /tmp/codex-findings-$$.md "$REVIEW_PROMPT" </dev/null >/tmp/codex-full-$$.out 2>&1 &
 ```
 
 Run it in the background. Tail `codex-full-$$.out` for liveness — Codex prints its tool calls + reasoning as it goes and ends with a `tokens used` line (`grep -c "tokens used"` is a valid done-check). Read `codex-findings-$$.md` for the clean findings once it completes. Note: Codex has its own `deepgrill`/`grill` skills, so a "review this PR" prompt typically triggers its own multi-lane adversarial pass — thorough, but slow.
 
-**Runtime defaults (why it is slow).** Codex commonly defaults to a high-reasoning model (e.g. `gpt-5.5` at `xhigh` effort), so a deep review genuinely takes several minutes — the "looks hung" warning above is real, not a bug. For a faster pass, lower it with `-m <model>` or `-c model_reasoning_effort=medium`.
+**Runtime defaults (why it is slow).** Codex commonly defaults to a high-reasoning model (e.g. `gpt-5.5` at `xhigh` effort), and a "review this" prompt makes it spin up its **own** `grill`/`deepgrill` multi-role matrix (it reads `AGENTS.md` + `.codex/references/roles/*`), so a deep review genuinely takes several minutes — the "looks hung" warning above is real, not a bug. For a faster pass, lower the reasoning with `-c model_reasoning_effort=medium` (or `-m <model>`), and for a small, tightly-scoped diff tell Codex in the prompt to do a **single focused pass — not its own multi-agent matrix** — and to read only the named files. Distinguish this genuine slowness from the Trap 3 stdin **deadlock**: the former streams tool calls + reasoning as it works; the latter is frozen on `Reading additional input from stdin...`.
 
 ### `verify` mode (opt-in)
 
@@ -76,7 +77,7 @@ If `$ARGUMENTS` contains `verify`, the user wants Codex to also **run the tests/
 
 ```bash
 codex exec --sandbox workspace-write --skip-git-repo-check \
-  -o /tmp/codex-findings-$$.md "$REVIEW_PROMPT" >/tmp/codex-full-$$.out 2>&1 &
+  -o /tmp/codex-findings-$$.md "$REVIEW_PROMPT" </dev/null >/tmp/codex-full-$$.out 2>&1 &
 ```
 
 `workspace-write` lets Codex write within the repo (run tests, build) but it cannot escape the working directory or reach arbitrary network. **Never use `--dangerously-bypass-approvals-and-sandbox` (`--yolo`, = `danger-full-access` + no approvals) for a review** — it removes the sandbox entirely (full write + network + command execution), defeating the point of a read-only reviewer. Reserve yolo for a deliberate _fix_ workflow, never this skill.

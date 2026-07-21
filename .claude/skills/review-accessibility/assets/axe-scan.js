@@ -20,10 +20,16 @@
     document.head.appendChild(s);
   }
 
-  // 'region'/'landmark-one-main' flag every top-level block not wrapped in a
-  // <main>/<header>/etc. landmark — page-structure noise, not the
-  // component-level checks (labels, ARIA widget state, contrast) this tool
-  // is for. Disabled by default; re-enable via axe.configure if you want them.
+  // Runs axe-core's full default ruleset (WCAG 2.0/2.1 A/AA/AAA plus its
+  // curated non-WCAG 'best-practice' rules — ~30 rules like 'heading-order'
+  // and 'empty-heading' with no formal WCAG mapping but real value) rather
+  // than filtering to a single standard here. Each violation carries its
+  // own axe `tags` array (e.g. 'wcag2aa', 'wcag143'), which the orchestrator
+  // uses to classify findings by WCAG level in its reporting instead of
+  // silently dropping non-WCAG-tagged rules at scan time.
+  // 'region'/'landmark-one-main' are the exception: disabled outright as
+  // page-structure noise (every top-level block not wrapped in a landmark),
+  // not because they're off-standard.
   var AXE_OPTIONS = {
     rules: {
       region: { enabled: false },

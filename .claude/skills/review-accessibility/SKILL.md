@@ -16,6 +16,8 @@ The detection engine is [axe-core](https://github.com/dequelabs/axe-core) (loade
 
 You never modify the target app's source to install this — it's 100% injected at runtime.
 
+**Standard**: the scan runs axe-core's full default ruleset, not a single filtered standard — that's WCAG 2.0/2.1 Level A, AA, and AAA success criteria together with axe-core's curated non-WCAG "best-practice" rules (things like `heading-order`, `empty-heading` — real value, no formal WCAG mapping). Every violation axe reports carries a `tags` array (e.g. `wcag2aa`, `wcag143`) that identifies exactly which WCAG success criterion and level it maps to, or shows only `best-practice` if it doesn't map to one. Phase 4 uses those tags to classify each fix in the PR rather than making a blanket "WCAG AA compliant" claim — see Phase 4 step 3 and the Notes below for why that distinction matters.
+
 ## Phase 0: Resolve targets
 
 1. Parse `$ARGUMENTS` for a base URL and, optionally, specific route paths.
@@ -38,7 +40,7 @@ Using whichever active surface was resolved in Phase 0, for each route:
 2. Read `assets/axe-scan.js` from this skill directory and inject its full contents via the browser tool's JS execution (eval the file contents as-is — it's a self-invoking function, safe to inject verbatim).
 3. Confirm the scan finished: poll `window.__a11yScan.ready === true` (it starts `false` until axe-core loads from the CDN and finishes running, so this may take a couple seconds).
 4. Read back `window.__a11yScan.violations` and report to the user how many were found on this route, broken down by impact (critical/serious/moderate/minor) — a status update, not a gate; don't wait for approval to continue.
-5. Every violation at every impact level is in scope for fixing — there's no severity cutoff and no ignore list. Persist the full violation list (per node: `ruleId`, `impact`, `help`, `helpUrl`, `target` selector, `html` snippet, `failureSummary`, `url`) to `.claude/a11y-review/<route-slug>.json` in the **target repo's working directory** (create the folder if needed) — this is your audit trail and the input to Phase 2.
+5. Every violation at every impact level is in scope for fixing — there's no severity cutoff and no ignore list. Persist the full violation list (per node: `ruleId`, `impact`, `help`, `helpUrl`, `tags`, `target` selector, `html` snippet, `failureSummary`, `url`) to `.claude/a11y-review/<route-slug>.json` in the **target repo's working directory** (create the folder if needed) — this is your audit trail and the input to Phase 2. `tags` is what lets Phase 4 state which WCAG success criterion (if any) each fix maps to — don't drop it when persisting.
 
 ## Phase 2: Fix
 
@@ -56,7 +58,7 @@ For each route you touched, re-navigate and re-inject `assets/axe-scan.js` to co
 
 1. Create a new branch off the current HEAD (don't build on top of unrelated in-progress branches — check what branch you're on and confirm with the user if it looks like someone else's unfinished work rather than a clean base).
 2. Stage and commit the fixed files. Commit message summarizes what was fixed (rule types + route count), not a route-by-route diary.
-3. Push the branch and open a PR (`gh pr create`) with a body that lists: violations fixed per route (rule + impact + brief description), and — critically — anything from Phase 1 you couldn't confidently match to source, called out explicitly so the human knows to check it manually rather than assuming full coverage.
+3. Push the branch and open a PR (`gh pr create`) with a body that lists, per fix: the rule, impact, a brief description, and its **WCAG classification** derived from the persisted `tags` — state the specific success criterion and level (e.g. "WCAG 1.4.3 Contrast (Minimum), Level AA" — the number in a `wcagNNN`-style tag is the SC number, `wcag2a`/`wcag2aa`/`wcag21a`/`wcag21aa` gives the version and level) or, if the only tags present are `best-practice`/`cat.*` with no `wcagNNN` tag, label it "best practice (no formal WCAG mapping)" instead of implying it's a compliance requirement. Also call out — critically — anything from Phase 1 you couldn't confidently match to source, so the human knows to check it manually rather than assuming full coverage.
 4. Report the PR URL back to the user. Merging is their call, not something this skill does.
 
 ## Notes
@@ -65,4 +67,5 @@ For each route you touched, re-navigate and re-inject `assets/axe-scan.js` to co
 - If the target page has a strict CSP that blocks the `cdn.jsdelivr.net` script load for axe-core, tell the user rather than silently failing — they'll need to allowlist it for the dev environment or you'll need to vendor axe-core locally (not done by default to keep this skill's footprint small).
 - Auth-gated apps: see Phase 0 step 2 for the hybrid flow (Claude in Chrome's existing session first, Browser-pane manual login as fallback). Login itself is always done by the human, never by this skill — entering credentials on someone's behalf is out of bounds regardless of permission granted.
 - No ignore mechanism: every run is a fresh, full pass over every violation at every severity. False positives or unwanted fixes get caught at PR review, not suppressed ahead of time — if a fix is wrong, reject it in the PR like any other code change.
+- Automated coverage is partial, not a compliance certification: axe-core's own docs estimate automated testing catches roughly 30-50% of WCAG success criteria — things like keyboard-only navigation, screen-reader announcement quality, and cognitive/plain-language criteria need manual testing this skill doesn't do. A clean run means "no axe-core-detectable WCAG violations on the scanned routes," not "WCAG 2.1 AA compliant." Don't let a PR from this skill imply the latter — say the former.
 - Git safety: this skill always works on a fresh branch and opens a PR — it never commits to the branch you started on if that branch has unrelated pending work, never force-pushes, and never merges. Ask before branching if the working tree isn't clean or the current branch looks mid-flight.

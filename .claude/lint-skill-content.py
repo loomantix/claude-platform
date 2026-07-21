@@ -3,7 +3,9 @@ r"""Lint files in `.claude/skills/` and `.claude/agents/` for weaponization patt
 
 Scope (the union of):
   - `.md` files under `.claude/skills/` and `.claude/agents/` (SKILL.md, agents),
-  - `.template` files under the same trees (consumer-facing prompt templates).
+  - `.template` files under the same trees (consumer-facing prompt templates),
+  - `.js` files under the same trees (skill payloads a SKILL.md tells Claude to
+    execute — e.g. a script injected into a live page via a browser tool).
 
 These files are prompts that drive Claude in dev sessions and consumer CI. A
 subtly malicious PR can add a few innocuous-looking lines to any skill — e.g.
@@ -46,7 +48,15 @@ DIFF_DIRS = [".claude/skills", ".claude/agents"]
 # `agent-loop/prompt.txt.template` (the agent-loop prompt) and
 # `agent-loop/agent-loop-instructions.md.template` (the consumer-owned
 # instructions bootstrap). Both are weaponization-eligible surfaces.
-SCOPE_SUFFIXES = (".md", ".template")
+#
+# `.js` covers skill payloads that a SKILL.md instructs Claude to execute
+# rather than read — today `review-accessibility/assets/axe-scan.js`, which
+# is eval'd inside a live (often authenticated) browser session. Prose and
+# payload are the same threat surface: an off-allowlist URL or a
+# fetch-and-execute is no less dangerous for sitting in a `.js` file, and
+# without this the gate could be sidestepped by moving a line out of the
+# SKILL.md and into an asset it sources.
+SCOPE_SUFFIXES = (".md", ".template", ".js")
 
 
 @dataclass(frozen=True)
@@ -166,6 +176,12 @@ URL_ALLOWLIST: set[str] = {
     "spdx.org",
     "semver.org",
     "json-schema.org",
+    # Public npm CDN. Added deliberately for `/review-accessibility`, which
+    # loads axe-core into the page under audit. Reviewer note: allowlisting a
+    # host permits *reaching* it, nothing more — a URL here still has to be
+    # version-pinned and SRI-checked at the point of use, since the risk is
+    # executing whatever bytes the CDN returns, not naming the host.
+    "cdn.jsdelivr.net",
 }
 
 # Match the full URL up to whitespace/closing bracket/quote so we can hand it
@@ -349,6 +365,10 @@ SELF_TEST_MUST_NOT_FLAG: list[str] = [
     "The fix lives at https://docs.anthropic.com/en/docs/claude-code/skills.",
     "## Concurrency control",
     "1. Make changes locally.",
+    # The /review-accessibility payload. Locks in the deliberate
+    # cdn.jsdelivr.net allowlist entry so a later cleanup can't silently
+    # revoke it and break that skill's only network dependency.
+    "  var SRC = 'https://cdn.jsdelivr.net/npm/axe-core@4.12.1/axe.min.js';",
 ]
 
 
@@ -487,6 +507,14 @@ def run_self_test() -> int:
         (".claude/skills/agent-loop/scripts/agent-loop.sh", False, "skills .sh out of scope"),
         ("docs/foo.md", False, ".md outside DIFF_DIRS"),
         (".claude/skills/agent-loop/notes.txt", False, ".txt outside SCOPE_SUFFIXES"),
+        # `.js` skill payloads are eval'd by the browser tool at Claude's
+        # instruction — same threat surface as the SKILL.md that sources them.
+        (
+            ".claude/skills/review-accessibility/assets/axe-scan.js",
+            True,
+            "skills .js payload",
+        ),
+        ("docs/example.js", False, ".js outside DIFF_DIRS"),
     ]
     for path, expected_in_scope, label in path_in_scope_cases:
         if _path_in_scope(path) != expected_in_scope:

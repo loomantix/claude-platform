@@ -80,6 +80,16 @@ targets:
     destination: .claude/skills/phone-install/SKILL.md
     substitutions: []
 
+  # /review-accessibility — human-triggered axe-core audit of a running app.
+  # Not part of the pre/post-push review chain. Two caveats worth knowing
+  # before syncing it to a consumer:
+  #   - it needs a browser tool family in the session (Claude in Chrome, or
+  #     the Browser pane); repos whose devs run neither should `skip_targets`
+  #     both entries rather than ship a skill that can't start.
+  #   - `axe-scan.js` is the only `.js` on the sync surface. It is a payload
+  #     injected into a live page, never imported or built by the consumer.
+  #     Repos that lint or format `.claude/**` should ignore it — it carries
+  #     an `eslint-env browser` header for the common case.
   - source: .claude/skills/review-accessibility/SKILL.md
     destination: .claude/skills/review-accessibility/SKILL.md
     substitutions: []

@@ -53,7 +53,7 @@ The chain is recommended on every source-code PR but not enforced — there's no
 
 ### Optional add-on: accessibility
 
-`/review-accessibility` is not part of the default or deep chain and isn't triggered automatically — run it yourself whenever a change touches UI (new component, layout change, form, anything rendering to the DOM), or periodically against a whole app. A human explicitly invokes it; from there it's fully automated — axe-core scans every route (auto-discovered, or a specific list you pass), every violation found gets fixed directly in source, and the run ends by opening a PR summarizing the changes. There's no per-violation approval step in the browser — review happens on the PR diff, same as any other change. See [`skills/review-accessibility/SKILL.md`](skills/review-accessibility/SKILL.md).
+`/review-accessibility` is not part of the default or deep chain and isn't triggered automatically — run it yourself whenever a change touches UI (new component, layout change, form, anything rendering to the DOM), or periodically against a whole app. A human explicitly invokes it; from there it's fully automated — axe-core scans every route (auto-discovered, or a specific list you pass), every violation it reports gets fixed directly in source, and the run ends by opening a PR summarizing the changes. Automated scanning covers WCAG A/AA plus best-practice rules and is not a compliance certification; the skill doc spells out what isn't covered. There's no per-violation approval step in the browser — review happens on the PR diff, same as any other change. See [`skills/review-accessibility/SKILL.md`](skills/review-accessibility/SKILL.md).
 
 ---
 

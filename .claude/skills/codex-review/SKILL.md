@@ -53,7 +53,7 @@ Write a tight, scoped prompt. A vague "review this" wastes the run; name the fil
 
 ## Phase 2: Run Codex (read-only, streaming)
 
-Run Codex non-interactive and read-only. **Flags verified against `codex-cli 0.141.0`** — the CLI surface drifts, so if a flag errors with `unexpected argument`, check `codex exec --help`. `codex exec` is already non-interactive, so there is **no** `--ask-for-approval` flag and **no** `--full-auto` on the subcommand — do not add them (they hard-error). The flags that matter, and three traps:
+Run Codex non-interactive and read-only. **Flags verified against `codex-cli 0.141.0`** — the CLI surface drifts, so if a flag errors with `unexpected argument`, check `codex exec --help`. `codex exec` is already non-interactive, so there is **no** `--ask-for-approval` flag and **no** `--full-auto` on the subcommand — do not add them (they hard-error). The flags that matter, and four traps:
 
 - `--sandbox read-only` — Codex cannot touch the tree. This is the safety property; keep it. (Sandbox modes: `read-only` · `workspace-write` · `danger-full-access`.)
 - `--skip-git-repo-check` — lets it run in a worktree / subdir without complaining.
@@ -61,6 +61,10 @@ Run Codex non-interactive and read-only. **Flags verified against `codex-cli 0.1
 - **Trap 1 — never pipe through `tail`/`head`.** They buffer until the process exits, so a multi-minute run looks hung with zero output. Redirect straight to a file.
 - **Trap 2 — contention.** Many parallel Codex runs (across sessions) rate-limit each other and slow down. Prefer one at a time.
 - **Trap 3 — `codex exec` reads stdin and will BLOCK on it.** It always tries to read a prompt from stdin (it prints `Reading additional input from stdin...`) even when the prompt is passed as an argument. If stdin never reaches EOF it hangs **forever** — the process stays alive doing nothing, which reads as "Codex is slow" but is a deadlock (observed ~10 min+ on that one line). This bites when the `codex exec` shares a bash invocation with a preceding stdin-consuming command (e.g. a `python3 - <<'PY'` heredoc), which leaves the shell's stdin open. **Always redirect `</dev/null`** (see the commands below) and give `codex exec` its own clean invocation — never prefix it with a heredoc. To spot a live hang: if the tail of the full log is stuck on `Reading additional input from stdin...`, it's blocked, not thinking — kill it and re-run with `</dev/null`.
+- **Trap 4 — `pkill -f` matches the shell doing the killing.** The obvious response to Trap 3 is `pkill -f "codex exec"`, and it backfires: `-f` matches full command lines, and the shell running that very command has `codex exec` in _its_ command line. So the kill takes out its own invocation — and if you relaunch Codex in the same command, it kills the relaunch too, which dies before writing a byte (observed exit 144, empty log, looking exactly like the hang you were trying to clear). Instead:
+  - **Never put a kill and a relaunch in one bash invocation.** Kill, confirm, then start the new run separately.
+  - Kill by **PID** (`$!` from the launch, or `pgrep -f "[c]odex exec"`), or use a self-excluding pattern — `pkill -f "[c]odex exec"` — where the bracket makes the pattern not match its own literal text.
+  - **Check who else is running Codex first** (`pgrep -af codex`). A developer or another agent session may have a long Codex turn open on the same machine; a broad `-f codex` pattern takes theirs down with yours.
 
 ```bash
 codex exec --sandbox read-only --skip-git-repo-check \

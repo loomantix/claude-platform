@@ -53,6 +53,8 @@
 .claude/skills/issues/scripts/link.py
 .claude/skills/issues/scripts/ready.py
 .claude/skills/refactorpass/SKILL.md
+.claude/skills/review-accessibility/SKILL.md
+.claude/skills/review-accessibility/assets/axe-scan.js
 .claude/skills/reviewit/SKILL.md
 .github/copilot-instructions.md
 .github/workflows/dco.yml

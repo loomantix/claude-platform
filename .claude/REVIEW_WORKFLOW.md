@@ -51,6 +51,10 @@ The chain is theatre on small / no-code changesets. Each skill applies the same 
 
 The chain is recommended on every source-code PR but not enforced — there's no push-gate. Trust + post-process audit, not pre-push blocking.
 
+### Optional add-on: accessibility
+
+`/review-accessibility` is not part of the default or deep chain and isn't triggered automatically — run it yourself whenever a change touches UI (new component, layout change, form, anything rendering to the DOM), or periodically against a whole app. A human explicitly invokes it; from there it's fully automated — axe-core scans every route (auto-discovered, or a specific list you pass), every violation found gets fixed directly in source, and the run ends by opening a PR summarizing the changes. There's no per-violation approval step in the browser — review happens on the PR diff, same as any other change. See [`skills/review-accessibility/SKILL.md`](skills/review-accessibility/SKILL.md).
+
 ---
 
 ## Why this shape
@@ -140,5 +144,6 @@ This decouples the committer (the App identity) from any human reviewer, so revi
 - [`.claude/skills/grill/SKILL.md`](skills/grill/SKILL.md) — pre-push adversarial pass (lean 2-agent default, deep full matrix)
 - [`.claude/skills/deepgrill/SKILL.md`](skills/deepgrill/SKILL.md) — orchestrator for the deep pre-push chain
 - [`.claude/skills/reviewit/SKILL.md`](skills/reviewit/SKILL.md) — post-push reviewer skill (lean: Gemini first, then Copilot, 2 iters; deep: same reviewers, 4 iters with early-exit + final `/deepgrill`)
+- [`.claude/skills/review-accessibility/SKILL.md`](skills/review-accessibility/SKILL.md) — optional, human-triggered a11y pass; scans, fixes in place, and opens its own PR, not part of the default/deep chain
 - [`.github/workflows/sync-from-upstream.yml.template`](../.github/workflows/sync-from-upstream.yml.template) — canonical sync workflow template
 - [`scripts/create-signed-commit.py`](../scripts/create-signed-commit.py) — Contents-API commit creator

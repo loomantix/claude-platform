@@ -80,6 +80,14 @@ targets:
     destination: .claude/skills/phone-install/SKILL.md
     substitutions: []
 
+  - source: .claude/skills/review-accessibility/SKILL.md
+    destination: .claude/skills/review-accessibility/SKILL.md
+    substitutions: []
+
+  - source: .claude/skills/review-accessibility/assets/axe-scan.js
+    destination: .claude/skills/review-accessibility/assets/axe-scan.js
+    substitutions: []
+
   - source: .claude/skills/agent-loop/SKILL.md
     destination: .claude/skills/agent-loop/SKILL.md
     substitutions: []

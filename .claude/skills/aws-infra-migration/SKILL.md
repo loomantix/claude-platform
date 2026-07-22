@@ -61,12 +61,41 @@ retire):
 3. **Fence** the source apply path (see Fence strategy).
 4. **Drain** in-flight source runs; confirm the source key's lock is released.
 5. **Snapshot** (admin): source `VersionId` + ETag + length (`head-object`);
-   `lineage` + `serial` + instance count (`state pull | jq`); config-dir +
-   `.terraform.lock.hcl` hashes. Record every value in the manifest — the version
-   IDs are the _only_ rollback path.
-6. **Copy the exact version** (admin, after go): `copy-object` with
-   `?versionId=<V>` to the destination key → verify dest lineage/serial/count/ETag
-   EQUAL the recorded values. Any mismatch = STOP.
+   `lineage` + `serial` + instance count; config-dir + `.terraform.lock.hcl`
+   hashes. Record every value in the manifest — the version IDs are the _only_
+   rollback path.
+
+   **Never read state with a bare `terraform state pull | jq`.** An unfiltered
+   `jq` is the identity filter: it prints the whole state document, including
+   every plaintext sensitive attribute, to your terminal and into any CI log or
+   shell history that captures it. Stream the object and project only the three
+   scalars you need — this form is safe on _every_ root, so use it as the default
+   rather than remembering to switch on the secret-bearing ones:
+
+   ```bash
+   aws s3 cp "s3://<bucket>/<key>" - --profile <admin> \
+     | jq '{lineage, serial, instances: ([.resources[].instances | length] | add)}'
+   ```
+
+6. **Copy the exact version** (admin, after go). Gate 3 established the
+   destination key was absent, but that was a check at a point in time — between
+   the gate and the copy, anything with write access could create it. Make the
+   copy itself refuse to overwrite rather than trusting the earlier check:
+
+   ```bash
+   aws s3api copy-object --profile <admin> \
+     --copy-source "<bucket>/<srckey>?versionId=<V>" \
+     --bucket <bucket> --key "<destkey>" \
+     --if-none-match '*'
+   ```
+
+   `--if-none-match '*'` fails the request with `PreconditionFailed` if the
+   destination key already exists, closing the time-of-check/time-of-use window.
+   **Record the `VersionId` the copy returns** — post-apply the destination has a
+   newer version, and rollback needs to name the exact one it is restoring from.
+   Then verify dest lineage/serial/count/ETag EQUAL the recorded values. Any
+   mismatch = STOP.
+
 7. **Add `infra/<root>/` to the destination** (fresh worktree): byte-identical
    `.tf` except the backend `key`; keep `.terraform.lock.hcl`. Open the PR →
    destination plan **must be `0/0/0`** (read the actual plan comment — "No
@@ -85,7 +114,15 @@ this root's services before its first plan/apply.
   Enumerated CRUD is not enough — the AWS provider makes _implicit_ read calls on
   every refresh that fail the first plan with `AccessDenied` if missing. The
   reliable way to enumerate them is a `TF_LOG=trace` plan under admin creds, then
-  grep the signed requests for the action names. Three classes bite repeatedly:
+  grep the signed requests for the action names.
+
+  **Treat the specific call-level claims below as observations, not as a spec.** Which
+  implicit reads a refresh makes is provider-implementation behavior and changes across
+  provider versions — the AWS **authorization** references (action names, ARN forms) are
+  stable and authoritative, but "this resource's Read also calls X" is only true of the
+  provider version you traced. Record the provider version alongside the grant in the
+  manifest, and re-trace rather than re-use the list after a provider major bump. Three
+  classes bite repeatedly:
   - **Tag reads** — but check HOW the service returns tags first. If the root's
     `provider.tf` sets `default_tags` (or a resource sets `tags`), the mutating side
     (`TagResource`/`UntagResource`) is needed on the apply role for any tag change.
@@ -150,7 +187,21 @@ fenced/disabled, either temporarily re-enable it, dispatch a single read-only pl
 for this root, confirm "No changes", and re-disable; or run `terraform plan`
 locally under admin creds. Record the run/evidence.
 
-**Gate 3 — destination key absent** (`head-object <destkey>` → 404).
+**Gate 3 — destination key absent** (`head-object <destkey>` → 404). This is a
+point-in-time check, not a guarantee: pair it with `--if-none-match '*'` on the
+copy (step 6) so the write itself is what enforces non-overwrite.
+
+**Gate 4 — backend bucket versioning is `Enabled`.**
+
+```bash
+aws s3api get-bucket-versioning --bucket <bucket> --profile <admin> --query Status
+```
+
+Every rollback instruction in this document assumes a prior object version can be
+retrieved by ID. If versioning is `Suspended` or absent, there is no rollback path
+and the whole procedure is a one-way door — stop and fix that before touching any
+state. Confirm the value; do not infer it from the bucket having been created by a
+module that usually enables it.
 
 ## Hard rules / gotchas
 
@@ -167,13 +218,14 @@ locally under admin creds. Record the run/evidence.
   owns only _some_ resources under a name prefix and other, unmanaged resources share
   that prefix, a `<prefix>/*` grant over-reaches (worst case: the apply role could
   delete an unmanaged prod secret/bucket/queue). Enumerate the exact ARNs the root
-  declares (list them live and diff against the `.tf`), not the prefix. Example: a
-  Secrets Manager root owning 14 named secrets under `dev/`, `beta/`, `staging/`,
-  `prod/` prefixes that also hold DB/redis/other secrets it does not manage — the
-  grant is 14 exact `secret:<name>-*` ARNs (the `-*` matches Secrets Manager's random
-  6-char suffix), and a policy-simulation asserting an unmanaged same-prefix secret is
-  DENIED proves no leak. When the root _does_ own a whole dedicated namespace with
-  nothing else in it, a `<prefix>/*` grant is fine.
+  declares (list them live and diff against the `.tf`), not the prefix. Shape of the
+  problem: a Secrets Manager root declares some secrets under per-environment prefixes,
+  but those same prefixes also hold datastore and third-party secrets it does not
+  manage — so the grant must enumerate one exact `secret:<name>-*` ARN per declared
+  secret (the `-*` matches Secrets Manager's random 6-char suffix), and a
+  policy-simulation asserting that an unmanaged same-prefix secret is DENIED is what
+  proves no leak. When the root _does_ own a whole dedicated namespace with nothing
+  else in it, a `<prefix>/*` grant is fine.
 - **Implicit reads with irregular ARN forms + multi-resource auth.** Some services'
   refresh reads authorize against ARN shapes you won't guess, and against _several_
   resource types at once — get either wrong and the first plan `AccessDenied`s.
@@ -197,13 +249,24 @@ locally under admin creds. Record the run/evidence.
     `--policy-input-list file://…`** ("invalid content") — pass the JSON inline via
     `"$(cat file)"` — and it enforces a per-member length limit, so simulate a trimmed
     slice of the relevant statements for a large policy.
-  - **`explicitDeny` vs `implicitDeny` will differ per role for the SAME assertion, and
-    that is not a gap.** A Deny only shows as _explicit_ on a role that also holds an
-    Allow for the action (the Deny has something to override); on a role with no such
-    Allow the same verb comes back _implicitDeny_. So an escalation check can read
-    `explicitDeny` on the apply role and `implicitDeny` on the plan role. **Both
-    block** — write the assertion to accept either, or a correct policy reads as a
-    false finding.
+  - **`explicitDeny` vs `implicitDeny` mean different things — assert the one you
+    actually expect per role, never "either".** `explicitDeny` means an applicable
+    `Deny` statement matched, whether or not an Allow also matched. `implicitDeny`
+    means nothing matched at all: no Allow _and_ no Deny. They both block the call
+    today, which is why it is tempting to accept either — but they are not
+    interchangeable evidence. `implicitDeny` says only "this role was never granted
+    the action", which stops being true the moment someone widens an unrelated
+    wildcard; `explicitDeny` says "a protection statement is in force here". An
+    assertion written to accept either would report a **missing protection policy**
+    as a pass.
+
+    So when the same assertion returns `explicitDeny` on the apply role and
+    `implicitDeny` on the plan role, do not wave it through as a quirk — that is
+    telling you the Deny is present on one role's policy and **absent from the
+    other's**. Decide deliberately which roles must carry the Deny (for a trust
+    anchor, normally both), assert `explicitDeny` on each of those, and assert
+    `implicitDeny` only where you genuinely intend "never granted, no guard needed".
+
   - **CloudWatch Logs ARN forms split by action.** `logs:DescribeLogGroups` has
     `Resources: null` in the service reference — no resource-level permissions — so it
     MUST be granted on `*`; scoping it to the group ARN denies. But
@@ -215,6 +278,7 @@ locally under admin creds. Record the run/evidence.
   - **IAM is a global service** — its refresh calls sign against `us-east-1`, not the
     provider region, so a `TF_LOG=trace` grep filtered by the provider region silently
     misses every IAM read.
+
 - **Least-privilege can be _more_ restrictive than the source — decide per resource.**
   A crown-jewel resource (a KMS key over regulated data, a human-access SSO permission
   set) can be migrated **read-only** on the destination CI roles even though the source
@@ -267,10 +331,14 @@ locally under admin creds. Record the run/evidence.
     nothing to widen and nothing an errant apply could mutate natively (no added Deny
     either). The cleanest Gate 1 of all.
   - **Reuse an existing shared federation provider that already accepts the destination
-    repo** (read its condition — e.g. a GitHub WIF provider whose `attribute_condition`
-    is `repository_owner == '<org>' && repository != '<source>'` already admits any other
-    org repo) rather than adding or mutating one. That avoids a self-referential change
-    to the very root you are moving and keeps the migrated `.tf` byte-identical.
+    repo** rather than adding or mutating one — that avoids a self-referential change to
+    the very root you are moving. Read its condition first. A GCP `attribute_condition` is
+    CEL over the **qualified** claim namespace, so an admitting condition looks like
+    `assertion.repository_owner_id == '<numeric-owner-id>'` (or `attribute.<mapped-name>`
+    for claims routed through `attribute_mapping`) — a bare `repository_owner` is not
+    valid CEL and will not evaluate. Prefer the **immutable numeric** owner/repository ID
+    claims over the name-based ones: GitHub recycles org and repo names, so a name-based
+    condition can silently start admitting a different repository.
   - **Local Gate-2 needs that cloud's local creds**, distinct from its CLI login — GCP's
     provider reads Application Default Credentials, so a local `terraform plan` needs an
     interactive `gcloud auth application-default login` (the CLI `gcloud auth login`
@@ -334,15 +402,26 @@ locally under admin creds. Record the run/evidence.
 - **Unpinned registry modules + per-root provider locks.** A root whose `main.tf` uses a
   registry module with **no `version` constraint** re-resolves to _latest_ on every `init`,
   and the state doesn't record which version built it — so a dest `init` can silently pull
-  a newer module and the dest plan diffs even though the state is byte-identical. Resolve
-  the real version with `terraform init` + read `.terraform/modules/modules.json`, and run
-  the source Gate-2 plan and the dest plan in the **same window** so both resolve the same
-  latest — a `0/0/0` dest plan then confirms they matched (no pin needed; pin the module
-  version only if they diverge). Likewise keep **each root's OWN `.terraform.lock.hcl`**:
+  a newer module and the dest plan diffs even though the state is byte-identical. Note the
+  dependency lock file does **not** help here — it records provider selections only, never
+  remote module versions.
+
+  Resolve the version the source actually built with (`terraform init`, then read
+  `.terraform/modules/modules.json`) and **pin it in the migrated `.tf` for the cutover**.
+  Running the source Gate-2 plan and the dest plan in the same window so both resolve the
+  same `latest` makes the zero-diff gate pass, but it only proves the two resolutions
+  matched _at that moment_ — the destination is left re-resolving on every future `init`,
+  so a later routine apply can silently become an unrelated module upgrade with nobody
+  reviewing it. Pin for the move; propose the upgrade as its own reviewed change
+  afterwards. (This is the one place the migrated `.tf` is deliberately not byte-identical
+  to the source — note it in the manifest.)
+
+  Likewise keep **each root's OWN `.terraform.lock.hcl`**:
   roots can pin different provider majors (a VPC root on aws `6.x` while others are `5.x`);
   the locks are independent, so a `6.x` root is inert to the rest — but a dest that reused
   another root's lock would load a different provider and diff. Watch the first plan of a
   new-major root for `5.x`→`6.x` behavior drift.
+
 - **New repos get immutable OIDC subjects** (numeric org/repo IDs), not `owner/repo`.
   Name-based AWS trust fails `AssumeRole` even after the policy is correct. Map each
   trusted repo to its real subject prefix in `bootstrap/`.
@@ -358,15 +437,18 @@ locally under admin creds. Record the run/evidence.
   recreate.
 - **Worktree discipline:** fresh worktree per repo; never branch/switch a `main` checkout;
   sign commits; annotated tags; merge commits.
-- **Managed policy vs inline at the 10240-byte limit.** The dest apply role aggregates
-  every migrated root's grant inline and eventually hits AWS's **10240-byte inline
-  role-policy limit**. In one migration the database root was the tipping point — the plan
-  role squeaked in at ~10117 B, the apply role would have been ~13315 B. When appending a
-  root's grant would exceed it, put the grant in a **customer-managed policy** (6144 B
-  each; a role attaches many) and attach it to _both_ roles instead of inline — this also
-  de-dups a read-only grant that is identical on plan and apply. Re-plan then shows the
-  managed policy + 2 attachments added and the plan-role inline reverting. Use managed
-  policies from the start for the remaining large roots.
+- **Managed policy vs inline at the inline-policy size ceiling.** The dest apply role
+  aggregates every migrated root's grant inline and eventually hits AWS's **10,240-character
+  inline role-policy limit** (characters excluding whitespace, not bytes — so minifying the
+  JSON buys nothing, but reformatting it costs nothing either). Expect a mid-sized root to
+  be the tipping point, and expect the apply role to hit it well before the plan role, since
+  it carries the mutating statements too. Watch for it: the failure arrives as a
+  `LimitExceeded` on apply, not as a review comment. When appending a root's grant would
+  exceed the ceiling, put the grant in a **customer-managed policy** (6,144 characters each;
+  a role attaches many) and attach it to _both_ roles instead of inline — this also de-dups
+  a read-only grant that is identical on plan and apply. Re-plan then shows the managed
+  policy + 2 attachments added and the plan-role inline reverting. Use managed policies from
+  the start for the remaining large roots rather than migrating to them under duress.
 - **Enumerate tag-reads per service namespace, not once.** One root can hold resources
   from several services that each make a _separate_ refresh tag-read — a database root
   with CloudWatch **alarms** (`cloudwatch:ListTagsForResource`) _and_ CloudWatch **Logs**
@@ -410,15 +492,19 @@ locally under admin creds. Record the run/evidence.
   change the backend bucket would put the shared state store at risk. Verify Gate 2 AND the
   dest plan both show the backend bucket refreshing to `0/0/0`, and keep the root
   **read-only on CI** so a future 0-approval apply can never mutate the backend bucket
-  (bucket changes = deliberate admin hand-apply). A module-based root (e.g. 24
-  `../modules/s3` instantiations → 138 instances) must carry the shared module dir alongside
-  it (`infra/modules/s3`); ensure CI root-discovery excludes `infra/modules/*` — a module
-  has no `provider.tf`, so it is never mistaken for a root.
-- **Plaintext-state roots: read state ONLY via streamed `jq`.** A database root's state
-  holds `aws_secretsmanager_secret_version` values and `random_password` results in
-  cleartext. Never `terraform show` / `state pull` to disk, and never a `jq` filter that
-  emits `.instances[].attributes.*`; stream (`aws s3 cp <key> - | jq …`) and extract only
-  lineage/serial/counts. Verify the `random_password` resources did **not** regenerate by
+  (bucket changes = deliberate admin hand-apply). A **module-based root** — one where a
+  handful of module instantiations expand into a much larger instance count — must carry the
+  shared module directory alongside it (`infra/modules/<name>`); ensure CI root-discovery
+  excludes `infra/modules/*`, which it does naturally if discovery keys on `provider.tf`,
+  since a module has none.
+- **Plaintext-state roots make the step-5 discipline non-negotiable.** A database root's
+  state holds `aws_secretsmanager_secret_version` values and `random_password` results in
+  cleartext — Terraform state is not encrypted at the document level, so "sensitive" only
+  suppresses CLI _display_, never storage. Never `terraform show` / `state pull` to disk,
+  and never a `jq` filter that emits `.instances[].attributes.*`. Use the streamed,
+  explicitly-projected read from step 5 — it is the default everywhere precisely so that
+  arriving at a secret-bearing root requires no change in habit. Verify the
+  `random_password` resources did **not** regenerate by
   comparing a **sha256 of the sorted `<name>=<result>` lines** pre- vs post-apply (hash
   only — never print the values); a changed hash = a data incident. Delete any trace file
   that captured plan-time secret reads or SSO tokens when done.
@@ -447,7 +533,31 @@ Decide once with the owner:
 
 ## Rollback
 
-Only possible if the manifest captured version IDs. Rollback re-arms a writer against a key
-the destination now owns, so **fence the destination first** (mirror the forward discipline
-exactly), restore from the **latest destination version** (never the stale source object) or
-re-point old code at the destination key, then re-enable exactly one writer.
+Only possible if Gate 4 passed and the manifest captured version IDs.
+
+Rollback re-arms a writer against a key the destination now owns, which is the same
+split-brain hazard as the forward move — so it gets the same discipline, step for step, not
+just a "fence the destination first" gesture:
+
+1. **Fence** the destination apply path.
+2. **Drain** in-flight destination runs and **confirm the destination key's lock is
+   released** — a rollback that copies over a key mid-apply is the worst outcome available.
+3. **Snapshot** the destination as it stands now (`head-object` → `VersionId`/ETag; streamed
+   `lineage`/`serial`/count per step 5). You are about to overwrite it and will want the
+   ability to undo the undo.
+4. **Select the exact version to restore.** Normally the **latest destination version**,
+   never the stale source object — the destination has applied since the cutover and its
+   state has moved on. Name the version ID explicitly from the manifest; do not rely on
+   "current".
+5. **Copy** it into place, then **verify** lineage/serial/count against what you expect.
+6. **Re-enable exactly one writer.**
+
+Note that step 5 is the one place `--if-none-match '*'` is wrong — you are deliberately
+overwriting an existing key. That is precisely why steps 1–3 have to be real: the guard
+that protects the forward copy is unavailable here, so draining and snapshotting are the
+only things standing between a rollback and a lost state lineage.
+
+**Inventory every write path before declaring the destination fenced.** Disabling the one
+obvious apply workflow is not enough if a drift-detection cron, a scheduled plan-and-apply,
+a reusable workflow called from elsewhere, or an operator's local credentials can also write
+that key. Enumerate them; fence all of them.

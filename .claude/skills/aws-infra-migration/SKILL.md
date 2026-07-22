@@ -86,7 +86,6 @@ this root's services before its first plan/apply.
   every refresh that fail the first plan with `AccessDenied` if missing. The
   reliable way to enumerate them is a `TF_LOG=trace` plan under admin creds, then
   grep the signed requests for the action names. Three classes bite repeatedly:
-
   - **Tag reads** — but check HOW the service returns tags first. If the root's
     `provider.tf` sets `default_tags` (or a resource sets `tags`), the mutating side
     (`TagResource`/`UntagResource`) is needed on the apply role for any tag change.
@@ -309,14 +308,14 @@ locally under admin creds. Record the run/evidence.
     (the kubeconfig authenticates as the assumed role), in **both** the plan and apply
     jobs.
   - ⚠ **Local Gate-2 on a Kubernetes root is worthless against the default context.** A
-    dev laptop's `~/.kube/config` current-context is often something like `minikube`; a
-    default-context plan points the providers at the _wrong cluster_ and reports every
-    resource as **to-be-created** — which reads as catastrophic drift and is pure
-    artifact. Use an isolated kubeconfig
+    dev laptop's default kubeconfig usually has some unrelated current-context (a local
+    single-node cluster, say); a default-context plan points the providers at the _wrong
+    cluster_ and reports every resource as **to-be-created** — which reads as
+    catastrophic drift and is pure artifact. Use an isolated kubeconfig
     (`aws eks update-kubeconfig … --kubeconfig <scratch>`) and pass the root's kubeconfig
-    variable. **If the root hardcodes `~/.kube/config` with no variable**, temporarily
-    repoint the real file (back it up) or switch the current-context — and put that in
-    the manifest so the next operator doesn't rediscover it.
+    variable. **If the root hardcodes the default kubeconfig location with no variable**,
+    temporarily repoint that file (back it up) or switch the current-context — and put
+    that in the manifest so the next operator doesn't rediscover it.
   - **Migrate the small cluster root FIRST as a canary** when two roots share this wiring:
     it exercises the identical kubeconfig + access-entry design against a handful of
     resources instead of hundreds, so a scoping mistake surfaces cheaply and the large

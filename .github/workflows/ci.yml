@@ -123,6 +123,17 @@ jobs:
       - name: Prettier --check
         run: npx --yes prettier@3.8.3 --check .
 
+  accessibility-asset:
+    name: Accessibility asset sanitization
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+      - name: Test sanitized browser output contract
+        run: node --test tests/review-accessibility-asset.test.js
+
   render-check:
     # The `format` job checks the TEMPLATE; this job checks what consumers
     # actually receive. Substitution can break formatting the template

@@ -64,6 +64,16 @@ targets:
     destination: .claude/skills/actions-usage-audit/SKILL.md
     substitutions: []
 
+  # /pr-stats — read-only org PR-authorship counts per repo and per author.
+  # Same shape as /actions-usage-audit: generic by design, with org-specific
+  # knowledge (non-suffixed machine accounts, renamed repos) in a
+  # consumer-owned, non-synced `.claude/pr-stats.local.md` it reads if present.
+  # Needs `gawk` at run time; the skill checks and says so rather than
+  # silently misreporting under mawk/BSD awk.
+  - source: .claude/skills/pr-stats/SKILL.md
+    destination: .claude/skills/pr-stats/SKILL.md
+    substitutions: []
+
   - source: .claude/skills/copilot-review/SKILL.md
     destination: .claude/skills/copilot-review/SKILL.md
     substitutions: []

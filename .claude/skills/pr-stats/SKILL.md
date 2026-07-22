@@ -20,7 +20,7 @@ If the user just says "how many PRs did each person do this year" / "last 6 mont
 ## Required environment
 
 - `gh` CLI authenticated against the target org (`gh auth status` should show the org under "Token scopes"). No special env vars beyond that.
-- **`gawk`.** The aggregation uses true multidimensional arrays (`m[$1][$3]`) and `asorti()`, both GNU extensions. `mawk` (the default `awk` on Debian/Ubuntu) and BSD `awk` on macOS will fail or silently misreport. Check with `awk --version | head -1` and, if it is not GNU Awk, either install `gawk` or tell the user the aggregation step needs it — do not fall back to a subtly different one-dimensional version.
+- **`gawk`.** The aggregation uses true arrays-of-arrays (`m[$1][$3]`) and `asorti()`, both GNU extensions. `mawk` (the default `awk` on Debian/Ubuntu) and BSD `awk` on macOS do not support them and fail with a syntax error. Check with `command -v gawk` — the snippets below invoke `gawk` explicitly, not the system `awk`, so testing `awk --version` tests the wrong binary. If `gawk` is absent, install it or tell the user the aggregation step needs it; do not hand-translate the matrix into a one-dimensional version, which is where a real misreport would come from.
 
 ## Optional org context
 
@@ -51,31 +51,44 @@ tmp="${TMPDIR:-/tmp}/pr-stats/$(gh repo view --json name --jq .name 2>/dev/null 
 mkdir -p "$tmp"
 out="$tmp/counts-$$.tsv"
 : > "$out"
+trap 'rm -f "$out" "$out.tmp"' EXIT
+
+# Append one window's rows and echo how many were added. Counting the delta
+# locally is what lets the cap check below cost zero extra API calls.
+pull_window() {  # $1=range  $2=label
+  local before after
+  wait_for_search_quota
+  before=$(wc -l < "$out")
+  gh search prs --owner "$OWNER" \
+    --"$WINDOW_FIELD" "$1" \
+    --limit 1000 --json author,repository \
+    --jq ".[] | \"$2\t\(.repository.name)\t\(.author.login)\"" >> "$out"
+  after=$(wc -l < "$out")
+  echo $(( after - before ))
+}
+
 for m in "${months[@]}"; do
   start="${m% *}"; end="${m#* }"; label="${start:0:7}"
-  # Wait for search quota before each call — 30 req/min limit.
-  until [ "$(gh api rate_limit --jq '.resources.search.remaining')" -gt 5 ]; do sleep 5; done
-  gh search prs --owner "$OWNER" \
-    --"$WINDOW_FIELD" "${start}..${end}" \
-    --limit 1000 --json author,repository \
-    --jq ".[] | \"$label\t\(.repository.name)\t\(.author.login)\"" >> "$out"
-  n=$(awk -F'\t' -v l="$label" '$1==l' "$out" | wc -l)
+  n=$(pull_window "${start}..${end}" "$label")
   echo "$label  $n PRs"
   if [ "$n" -eq 1000 ]; then
     echo "  ⚠ hit 1000-result cap — splitting $label into halves" >&2
-    # Replace the truncated rows with two half-month pulls.
-    grep -v "^$label" "$out" > "$out.tmp" && mv "$out.tmp" "$out"
+    # Drop the truncated rows. Use awk, NOT `grep -v "^$label"`: when the capped
+    # month is the only month in the file so far (the first or only requested
+    # month), grep selects nothing and exits 1, so an `&& mv` never fires and the
+    # 1000 truncated rows stay — then both halves are appended on top of them,
+    # overcounting by exactly 1000. awk's exit status doesn't depend on matching,
+    # so the replacement always installs.
+    awk -F'\t' -v l="$label" '$1 != l' "$out" > "$out.tmp"
+    mv "$out.tmp" "$out"
     mid=$(date -d "$start +14 days" +%Y-%m-%d)
     mid_next=$(date -d "$mid +1 day" +%Y-%m-%d)
-    until [ "$(gh api rate_limit --jq '.resources.search.remaining')" -gt 5 ]; do sleep 5; done
-    gh search prs --owner "$OWNER" --"$WINDOW_FIELD" "${start}..${mid}" --limit 1000 --json author,repository --jq ".[] | \"$label\t\(.repository.name)\t\(.author.login)\"" >> "$out"
-    until [ "$(gh api rate_limit --jq '.resources.search.remaining')" -gt 5 ]; do sleep 5; done
-    gh search prs --owner "$OWNER" --"$WINDOW_FIELD" "${mid_next}..${end}" --limit 1000 --json author,repository --jq ".[] | \"$label\t\(.repository.name)\t\(.author.login)\"" >> "$out"
-    # Confirm neither half is itself at 1000 — if it is, surface a hard failure rather than silently undercount.
-    for half in "${start}..${mid}" "${mid_next}..${end}"; do
-      half_n=$(gh search prs --owner "$OWNER" --"$WINDOW_FIELD" "$half" --limit 1000 --json number --jq 'length')
+    for range in "${start}..${mid}" "${mid_next}..${end}"; do
+      half_n=$(pull_window "$range" "$label")
+      # Neither half may itself be capped. Checked from the rows just appended —
+      # no confirmation re-query, which halves the API cost of a capped month.
       if [ "$half_n" -eq 1000 ]; then
-        echo "::error::Half-month $half also hit cap; this skill's split-once strategy is insufficient. Switch to per-week windows." >&2
+        echo "::error::Half-window $range also hit the 1000 cap; this skill's split-once strategy is insufficient. Switch to per-week windows." >&2
         exit 1
       fi
     done
@@ -87,17 +100,35 @@ done
 
 **Never silently report a truncated count.** If a window hits 1000 and the split doesn't resolve it, fail with a clear error rather than under-reporting throughput — the user is going to draw conclusions from these numbers.
 
-Delete the working TSV when the run finishes; it is intermediate data, not a deliverable.
+The `trap` deletes the working TSV on exit; it is intermediate data, not a deliverable, and the hard-failure path above exits without reaching any explicit cleanup.
 
 ### 3. Wait-for-rate-limit pattern
 
-`sleep` is blocked in foreground in some harness modes. Use the until-loop polling pattern shown above:
+**One `gh search prs` invocation is not one API request.** `--limit 1000` paginates at 100 results per request, so a single full-window pull can consume **up to 10** of the 30-per-minute search budget. A guard that reserves headroom for one request will happily start a pull that dies part-way through pagination, and a partial pull is exactly the silent undercount this skill exists to prevent.
+
+Reserve headroom for a whole paginated pull, and when short, wait for the documented reset rather than polling blindly:
 
 ```bash
-until [ "$(gh api rate_limit --jq '.resources.search.remaining')" -gt 5 ]; do sleep 5; done
+# `gh api rate_limit` hits /rate_limit, which is free — it does not consume
+# search budget, so polling it costs nothing.
+wait_for_search_quota() {
+  local need="${1:-12}" remaining reset now delay
+  while :; do
+    remaining=$(gh api rate_limit --jq '.resources.search.remaining')
+    [ "$remaining" -ge "$need" ] && return 0
+    reset=$(gh api rate_limit --jq '.resources.search.reset')
+    now=$(date +%s)
+    delay=$(( reset - now + 1 ))
+    [ "$delay" -lt 1 ] && delay=5
+    echo "  search quota ${remaining}/${need} — waiting ${delay}s for reset" >&2
+    sleep "$delay"
+  done
+}
 ```
 
-The `> 5` margin gives headroom for one extra call between the check and the actual query. `gh api rate_limit` doesn't itself count against the search budget (it hits `/rate_limit`, a free endpoint).
+`12` is 10 pagination requests plus a small margin. If a pull still fails mid-pagination, treat it as a hard error and re-run the window — do not accept the partial result.
+
+`sleep` is blocked in the foreground in some harness modes. If that applies, drive the wait from the harness's own polling primitive instead of a bare `sleep`; the logic is unchanged.
 
 ### 4. Aggregate
 
@@ -107,13 +138,18 @@ Three views, all from the same TSV (`month \t repo \t author`). The bot filter i
 
 ```bash
 gawk -F'\t' '$3 !~ /\[bot\]$/ && $3 != "Copilot" {m[$1][$3]++; a[$3]=1} END {
-  printf "%-9s","month"; for (u in a) printf "%-15s",u; print ""
-  n=asorti(m, months)
-  for (i=1;i<=n;i++) { printf "%-9s", months[i]; for (u in a) printf "%-15s", m[months[i]][u]+0; print "" }
+  na=asorti(a, authors)
+  nm=asorti(m, months)
+  printf "%-9s","month"; for (j=1;j<=na;j++) printf "%-15s", authors[j]; print ""
+  for (i=1;i<=nm;i++) {
+    printf "%-9s", months[i]
+    for (j=1;j<=na;j++) printf "%-15s", m[months[i]][authors[j]]+0
+    print ""
+  }
 }' "$out"
 ```
 
-Note the header row and the data rows both iterate `for (u in a)`, which is unordered in awk but _consistently_ unordered within one process — so columns line up with their header. Don't split these into two separate awk invocations.
+Sort the author names into an indexed array **once** with `asorti()` and drive both the header and the data rows from it. Do not iterate `for (u in a)` in both places and assume the two traversals agree: awk specifies no traversal order for an associative array, so alignment would rest on an implementation detail rather than a guarantee. Sorting also makes the report deterministic between runs, which matters when someone diffs two months' output.
 
 **View B — Per-repo per-human totals:**
 

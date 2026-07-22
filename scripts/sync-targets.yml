@@ -90,6 +90,18 @@ targets:
   #     injected into a live page, never imported or built by the consumer.
   #     Repos that lint or format `.claude/**` should ignore it — it carries
   #     an `eslint-env browser` header for the common case.
+  # /aws-infra-migration — fenced one-writer Terraform state cutover between
+  # repos/CI systems. Read-mostly: every live state mutation is gated on an
+  # explicit human go, and the skill never mutates state on its own initiative.
+  # Narrower audience than the review-chain skills — it is driven from whichever
+  # repo owns the destination Terraform pipeline, so consumers that own no
+  # Terraform can `skip_targets` it rather than carry a runbook they never
+  # invoke. Synced by default because "which repo owns Terraform" changes over
+  # time and an absent skill is harder to discover than an unused one.
+  - source: .claude/skills/aws-infra-migration/SKILL.md
+    destination: .claude/skills/aws-infra-migration/SKILL.md
+    substitutions: []
+
   - source: .claude/skills/review-accessibility/SKILL.md
     destination: .claude/skills/review-accessibility/SKILL.md
     substitutions: []

@@ -47,11 +47,24 @@ Codex runs **read-only by default** — it can read the tree and reason, but can
 
 Write a tight, scoped prompt. A vague "review this" wastes the run; name the files and the riskiest failure modes. Include:
 
-- One line on what the repo is, and — **if the repo is or may become public — an instruction to never print secrets, ARNs, account ids, or hostnames** in its output.
+- One line on what the repo is, **that it is our own code**, and — **if the repo is or may become public — an instruction to never print secrets, ARNs, account ids, or hostnames** in its output.
 - 2–3 lines on what the change does.
 - The tracked diff to read (`git diff <MB>`) plus the untracked paths from `git ls-files --others --exclude-standard`, and an instruction to **read the actual source, not just the diff**.
-- The 3–4 riskiest things about this specific change ("attack these").
+- The 3–4 riskiest things about this specific change, phrased as **where to scrutinize hardest** — not as an attack. See the framing rules below.
 - The output contract: **only high-confidence material findings** (correctness, security, data-loss); for each, `file:line`, severity, concrete issue, concrete fix; "no material findings" if clean; be terse.
+
+### Framing: write it as internal QA, not as an attack
+
+The reviewer is another vendor's model with its own safety classifiers. A security-focused review of code you own is entirely legitimate, but **offensive-security phrasing can get the run refused mid-pass** — and a refusal burns the whole multi-minute, rate-limited run and reads deceptively like a clean review. Frame every prompt so its legitimacy is obvious from the text alone:
+
+- **Lead with ownership and purpose.** One line, always: _"This is our own repository. This is a routine pre-merge quality and security review of a change we wrote. Report findings only — make no changes."_ Ownership plus review-intent is what separates QA from targeting someone else's system, and the model cannot infer either one.
+- **Never direct offensive verbs at the code.** Drop "attack these", "exploit this", "break it", "pwn", "hack", "bypass the auth", "red team this". Ask instead: _"Scrutinize these areas hardest"_, _"where is this most likely to be wrong?"_, _"under what inputs does this produce a wrong result, lose data, or grant access it shouldn't?"_ Same coverage, no trigger.
+- **Ask for the defect and the fix, never for a weapon.** The deliverable is the failing input shape, the wrong outcome, and the concrete fix. Do not ask for a working exploit, a PoC payload, or reproduction steps against a live system — none of that is needed to act on a finding, and all of it invites a refusal.
+- **Keep the target the diff, not a system or a person.** Don't name live hostnames, customers, or production endpoints as things to probe. "Review this auth middleware" is fine; "get past the login on <host>" is not, and it is not what you want anyway.
+- **Don't paste credential-shaped strings** into the prompt, even as illustrative examples. Refer to them by variable name.
+- **The rules cover the whole run**, not just the opening prompt: follow-up turns, `verify`-mode instructions, and any repo-level instruction file the reviewer auto-loads (e.g. `AGENTS.md`). In `verify` mode, "run the test suite and the build" is fine; "attack the running service" is not.
+
+If a run does come back refused, treat it as a **failed run** and re-frame — see Phase 3.
 
 ## Phase 2: Run Codex (read-only, streaming)
 
@@ -114,6 +127,7 @@ If `$ARGUMENTS` contains `verify`, the user wants Codex to also **run the tests/
 
 When the status file appears with exit code zero, read the findings file — it holds just Codex's final message, no need to dig through the stream. Treat the findings as a **second opinion, not a verdict**:
 
+- **First, confirm the run actually happened.** A safety refusal exits **zero**, so the status file cannot distinguish it from a clean review. A refused run looks like: an empty or missing findings file, or a findings file containing a decline ("I can't help with that", "I won't assist with…") instead of the contracted format, usually after a run far shorter than normal. **Never report that as "no material findings"** — it is an unreviewed change. Re-frame the prompt per the Phase 1 rules, keep the scope identical, and launch a fresh run; do not argue with the refusal in a follow-up turn on the same run. If a re-framed prompt is refused again, say so plainly and fall back to the Claude-side review chain rather than reporting the change as reviewed.
 - For each finding, verify it against the actual source before acting — Codex can be confidently wrong, just like any reviewer.
 - Present a deduplicated list to the user with `file:line`, severity, and Codex's suggested fix, plus your own one-line take (confirm / dispute, with evidence).
 - If this followed `/deepgrill`, call out where Codex **disagreed with or added to** the Claude-side findings — that delta is the whole reason to run it.

@@ -78,12 +78,15 @@ INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 # How far back a MERGED PR still counts as having "addressed" an issue.
 ADDRESSED_PR_WINDOW_DAYS = 30
 GH_LIST_LIMIT = 1000
+# The unfiltered open-issue walk pages through issues *and* pull requests, so it
+# needs a longer budget than the single-shot `gh issue list` queries.
+PAGINATED_QUERY_TIMEOUT_SECONDS = 180
 
 LABEL_PREFIXES_TO_SHOW = ("area:", "dev:", "source:", "status:")
 
 
-def run_gh_json(cmd: list[str], action: str, timeout: int = 60) -> Any:
-    """Run a required GitHub JSON query with a controlled, fail-closed error."""
+def run_gh_text(cmd: list[str], action: str, timeout: int = 60) -> str:
+    """Run a required GitHub query, returning raw stdout with fail-closed errors."""
     try:
         result = subprocess.run(
             cmd,
@@ -103,8 +106,14 @@ def run_gh_json(cmd: list[str], action: str, timeout: int = 60) -> Any:
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
         sys.exit(result.returncode)
+    return result.stdout
+
+
+def run_gh_json(cmd: list[str], action: str, timeout: int = 60) -> Any:
+    """Run a required GitHub JSON query with a controlled, fail-closed error."""
+    stdout = run_gh_text(cmd, action, timeout)
     try:
-        return json.loads(result.stdout)
+        return json.loads(stdout)
     except json.JSONDecodeError as exc:
         sys.stderr.write(f"Invalid JSON from `gh {action}`: {exc}\n")
         sys.exit(1)
@@ -135,21 +144,31 @@ def fetch_all_open_numbers() -> set[int]:
     subset, so a dependent with e.g. `--agent` doesn't look ready when its
     blocker lacks the `dev: agent` label.
     """
-    issues = run_gh_json(
+    # Paginated deliberately, rather than `gh issue list --limit GH_LIST_LIMIT`.
+    # This set must be COMPLETE: a blocker missing from it reads as closed, so a
+    # still-blocked issue is handed out as ready. Any fixed ceiling turns into
+    # that silent wrong answer the moment a repository outgrows it, and the
+    # fail-closed guard that prevented it instead took the ready queue down
+    # entirely. `--paginate` walks every page, so there is no ceiling to cross.
+    stdout = run_gh_text(
         [
-            "gh", "issue", "list",
-            "--state", "open", "--limit", str(GH_LIST_LIMIT),
-            "--json", "number",
+            "gh", "api", "--paginate",
+            f"repos/{_current_repo()}/issues?state=open&per_page=100",
+            "--jq", ".[] | select(.pull_request == null) | .number",
         ],
-        "issue list",
+        "api issues",
+        timeout=PAGINATED_QUERY_TIMEOUT_SECONDS,
     )
-    if len(issues) >= GH_LIST_LIMIT:
-        sys.stderr.write(
-            f"Open-issue query reached the {GH_LIST_LIMIT}-item gh limit; "
-            "refusing incomplete blocker resolution.\n"
-        )
-        sys.exit(1)
-    return {issue["number"] for issue in issues}
+    numbers: set[int] = set()
+    for line in stdout.split():
+        try:
+            numbers.add(int(line))
+        except ValueError:
+            sys.stderr.write(
+                f"Unexpected non-numeric issue number from `gh api issues`: {line!r}\n"
+            )
+            sys.exit(1)
+    return numbers
 
 
 def _current_repo() -> str:

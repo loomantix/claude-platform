@@ -126,6 +126,11 @@ engine in a fresh terminal.
    The helper fixes the cap at two Lean rounds or four Deep rounds. A later run
    on the same PR requires the current run to be ended and a new, explicit user
    authorization passed with `--restart`; a new session alone is not a restart.
+   Use the returned `first_round` for the first pass of that run, and increment
+   it for subsequent rounds. Attestation round numbers are PR-wide: restarting
+   never reuses a historical number, even after a head rewrite or an aborted
+   run. `authorize-pass` reports both that `round` and the relative `run_round`;
+   the two/four-round cap applies to `run_round`. Preserve earlier attestations.
 
 3. Declare the roster with the ledger helper's `post-roster`, naming the author
    engine and this PR's reviewer engines. Participation is declared, never
